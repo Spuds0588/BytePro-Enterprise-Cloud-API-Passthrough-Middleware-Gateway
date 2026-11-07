@@ -68,7 +68,7 @@ Highest-value workflow for title and broker partners; prioritised above every ot
 - [x] `deploy.sh` one-line CloudShell installer (prompts for BytePro URL/account/role credentials, generates invite codes, prints invite links + egress IP)
 - [x] Tests: session cache/refresh, invite provisioning, masking, reads/projection, fee/condition writes, queued and synchronous large-document upload/list/download, validation failures, retry classification, job ownership, HTTP e2e, template guards, executed inline bundle, static/community guards
 - [x] `npm run verify` green in this environment (55 tests under the glob; CI Verify jobs green on Node 20 and 24 at `1f79462`)
-- [x] `npm run verify` uses the same Node 24-compatible `test/*.test.js` glob as `npm test` and CI (proved by `test/template.test.js` — “npm run verify uses the same Node 24-compatible test glob”)
+- [x] `npm run verify` uses the same Node 24-compatible `test/*.test.js` glob as `npm test` and CI (proved by `test/template.test.js` — “npm run verify uses the same Node 24-compatible test glob”; shipped in `3932b29`)
 - [—] No further locally achievable feature item: every remaining entry is blocked on a BytePro tenant/AWS, a user-only product decision, a maintainer repository setting, or a separate architecture (see `history.md` audit)
 - [x] Community surfaces: `CONTRIBUTING.md`, `llms.txt`, GitHub Pages `index.html`, issue forms, PR template
 - [x] Community direction codified in `agents.md` §0 and repeated on every developer-facing surface

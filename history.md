@@ -4,6 +4,24 @@ Append-only. Newest entries at the top. Never rewrite past entries; add a correc
 
 ---
 
+## 2026-11-07 — Verify fix shipped; Node 20/24 CI and Pages green
+
+**Pushed.** The verify-glob fix and its regression test are in `3932b29` on `main`. `todo.md` points to the
+test and that commit.
+
+**CI.** Workflow run for `3932b29`: **Verify (Node 20) success, Verify (Node 24) success**, plus build and
+deploy checks success. This is the first run that exercises `npm run verify`'s corrected command path in
+addition to the existing `npm test` job.
+
+**GitHub Pages.** Deployment for `3932b29` succeeded. Live cache-busted fetches returned `200` for the
+homepage (15,373 bytes), `llms.txt` (5,451 bytes), `robots.txt` (133 bytes), and `sitemap.xml` (330 bytes);
+no site content changed in this commit, so the shipped copy is unchanged and current.
+
+**Cleanup.** `dist/` from the local build check was removed; no server process was started for this
+tooling-only change.
+
+---
+
 ## 2026-11-07 — Todo audit: no locally achievable feature left; verify command fixed
 
 **Audit.** Every remaining unchecked line in `todo.md` is `[—]`, not `[ ]`: live BytePro document/condition

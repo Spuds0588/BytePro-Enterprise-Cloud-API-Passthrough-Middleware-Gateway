@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Contribution guide
+    url: https://github.com/Spuds0588/BytePro-Enterprise-Cloud-API-Passthrough-Middleware-Gateway/blob/main/CONTRIBUTING.md
+    about: Read this first. Never post API keys, invite codes, passwords, loan data, or borrower PII.
+  - name: Deployment reports and support
+    url: https://github.com/Spuds0588/BytePro-Enterprise-Cloud-API-Passthrough-Middleware-Gateway/issues
+    about: Share a sanitized deployment result or ask a question about an existing issue.

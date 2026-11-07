@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BytePro Enterprise Cloud API Gateway — loan documents, conditions, persona-masked reads</title>
+<meta name="description" content="Open-source AWS gateway for BytePro Enterprise Cloud: scoped API keys, persona-masked loan reads, FIFO writes, loan document upload and download, and condition responses.">
+<link rel="canonical" href="https://spuds0588.github.io/BytePro-Enterprise-Cloud-API-Passthrough-Middleware-Gateway/">
+<link rel="alternate" type="text/plain" href="./llms.txt" title="Machine-readable project guide">
+<link rel="sitemap" type="application/xml" href="./sitemap.xml">
+<meta name="robots" content="index, follow">
+<meta property="og:type" content="website">
+<meta property="og:title" content="BytePro Enterprise Cloud API Gateway">
+<meta property="og:description" content="Invite-scoped, persona-masked API access to BytePro Enterprise Cloud, with loan document exchange and condition responses.">
+<meta property="og:url" content="https://spuds0588.github.io/BytePro-Enterprise-Cloud-API-Passthrough-Middleware-Gateway/">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="BytePro Enterprise Cloud API Gateway">
+<meta name="twitter:description" content="One-file AWS gateway for BytePro Enterprise Cloud: masked reads, FIFO writes, documents, and conditions.">
+<style>
+:root{--ink:#101828;--muted:#475467;--line:#d0d5dd;--bg:#fff;--soft:#f8fafc;--accent:#0b4f6c;--code:#f1f5f9}
+@media (prefers-color-scheme:dark){:root{--ink:#e4e7ec;--muted:#98a2b3;--line:#344054;--bg:#0d1117;--soft:#161b22;--accent:#7cc4e0;--code:#161b22}}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:64rem;margin:0 auto;padding:3rem 1.25rem 4rem}header{border-bottom:1px solid var(--line);padding-bottom:1.5rem;margin-bottom:2rem}
+h1{font-size:clamp(1.8rem,4vw,2.6rem);line-height:1.15;margin:0 0 .6rem;letter-spacing:-.02em}h2{font-size:1.3rem;margin:2.5rem 0 .75rem}h3{font-size:1.02rem;margin:1.5rem 0 .4rem}
+p,li{color:var(--muted)}p{max-width:52rem}.lede{font-size:1.1rem;color:var(--ink);max-width:50rem}
+a{color:var(--accent)}code{font:.86em ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--code);padding:.12rem .32rem;border-radius:4px}
+pre{background:var(--code);padding:1rem;border-radius:10px;overflow-x:auto;border:1px solid var(--line)}pre code{background:none;padding:0}
+table{width:100%;border-collapse:collapse;font-size:.92rem;margin:.75rem 0}th,td{border-bottom:1px solid var(--line);padding:.55rem .6rem;text-align:left;vertical-align:top}
+th{color:var(--ink);font-size:.82rem;text-transform:uppercase;letter-spacing:.04em}
+.grid{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));margin:1.25rem 0}
+.card{border:1px solid var(--line);border-radius:12px;padding:1rem 1.1rem;background:var(--soft)}.card h3{margin-top:0;color:var(--ink)}
+.note{border-left:4px solid var(--accent);padding:.75rem 1rem;background:var(--soft);border-radius:0 8px 8px 0}
+.pill{display:inline-block;border:1px solid var(--line);border-radius:99px;padding:.15rem .6rem;font-size:.75rem;font-weight:700;letter-spacing:.02em;margin-right:.35rem}
+nav{margin-top:1rem;display:flex;flex-wrap:wrap;gap:.5rem 1rem;font-size:.92rem}
+footer{margin-top:3.5rem;border-top:1px solid var(--line);padding-top:1.5rem;font-size:.92rem}
+summary{cursor:pointer;font-weight:650;color:var(--ink);padding:.35rem 0}
+details{border-bottom:1px solid var(--line);padding:.35rem 0}
+</style>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "WebSite",
+      "name": "BytePro Enterprise Cloud API Gateway",
+      "url": "https://spuds0588.github.io/BytePro-Enterprise-Cloud-API-Passthrough-Middleware-Gateway/"
+    },
+    {
+      "@type": "SoftwareApplication",
+      "name": "BytePro Enterprise Cloud API Passthrough & Middleware Gateway",
+      "applicationCategory": "BusinessApplication",
+      "operatingSystem": "AWS Lambda (Node.js 20)",
+      "description": "Open-source, one-file deployable gateway for BytePro Enterprise Cloud with invite-scoped API keys, persona-masked loan reads, FIFO writes, loan document exchange, and condition responses.",
+      "url": "https://spuds0588.github.io/BytePro-Enterprise-Cloud-API-Passthrough-Middleware-Gateway/",
+      "codeRepository": "https://github.com/Spuds0588/BytePro-Enterprise-Cloud-API-Passthrough-Middleware-Gateway",
+      "license": "https://opensource.org/licenses/MIT",
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+    },
+    {
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "Does the gateway store loan data or documents?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "No. It stores only tenant mappings, per-role session tokens, and job status. Document bytes travel inside an SQS message and are deleted with it."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Can a title company upload a title commitment?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes. Title and broker keys can upload a base64 PDF, list loan documents, and download one by ID. The appraisal persona is read-only."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Has this been verified against a live BytePro tenant?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "No. The maintainer has no BytePro access and no AWS account for this project. Behavior is verified locally against a fake BytePro API; deployment evidence must come from the community."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "How do I contribute?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Open an issue with sanitized evidence, or a pull request with a regression test. The maintainer is happy to add contributors."
+          }
+        }
+      ]
+    }
+  ]
+}
+</script>
+</head>
+<body>
+<main>
+<header>
+<h1>BytePro Enterprise Cloud API Gateway</h1>
+<p class="lede">An open-source, one-file deployable AWS gateway that gives title companies, TPO brokers, and appraisal vendors scoped access to BytePro Enterprise Cloud — without exposing the loan file or the service accounts behind it.</p>
+<p><span class="pill">Loan documents</span><span class="pill">Conditions</span><span class="pill">Persona masking</span><span class="pill">Static egress IP</span></p>
+<nav aria-label="Sections">
+<a href="#priority">Documents &amp; conditions</a>
+<a href="#api">API</a>
+<a href="#deploy">Deploy</a>
+<a href="#verify">What is verified</a>
+<a href="#faq">FAQ</a>
+<a href="#community">Community</a>
+</nav>
+</header>
+
+<section id="priority">
+<h2>Loan documents and conditions come first</h2>
+<p>The two workflows that block real partner integrations are exchanging loan file documents and answering underwriting conditions. Both are implemented, tested locally, and prioritised above every other phase.</p>
+<div class="grid">
+<article class="card">
+<h3>Loan document upload &amp; download</h3>
+<p><code>POST /v1/loans/{id}/documents</code> queues a base64 PDF through SQS FIFO and returns <code>202</code> with a job ID. <code>GET /v1/loans/{id}/documents</code> lists metadata; <code>GET /v1/loans/{id}/documents/{docId}</code> returns the PDF bytes. A title commitment is the canonical example.</p>
+</article>
+<article class="card">
+<h3>Condition responses</h3>
+<p><code>POST /v1/loans/{id}/conditions</code> accepts description and status rows from title and broker keys. Updates are applied by the worker with lock retries, and brokers can read the current conditions on the loan payload.</p>
+</article>
+<article class="card">
+<h3>No document at rest</h3>
+<p>Uploads are capped at 180,000 bytes so the PDF fits in the queue message. Nothing is written to DynamoDB or S3. Larger files are a deliberate architecture change, not a hidden truncation.</p>
+</article>
+</div>
+</section>
+
+<section id="api">
+<h2>API at a glance</h2>
+<table>
+<thead><tr><th>Method</th><th>Path</th><th>Purpose</th></tr></thead>
+<tbody>
+<tr><td>GET</td><td><code>/health</code></td><td>Open liveness check</td></tr>
+<tr><td>GET / POST</td><td><code>/portal</code></td><td>Role-invite key provisioning</td></tr>
+<tr><td>GET</td><td><code>/v1/loans/{id}?paths=Property,Loan,Milestones</code></td><td>Masked BytePro object notation</td></tr>
+<tr><td>POST</td><td><code>/v1/loans/{id}/conditions</code></td><td>Submit condition responses (202 + job)</td></tr>
+<tr><td>POST</td><td><code>/v1/loans/{id}/documents</code></td><td>Upload a base64 PDF (202 + job)</td></tr>
+<tr><td>GET</td><td><code>/v1/loans/{id}/documents</code></td><td>List loan documents</td></tr>
+<tr><td>GET</td><td><code>/v1/loans/{id}/documents/{docId}</code></td><td>Download one PDF</td></tr>
+<tr><td>PATCH</td><td><code>/v1/loans/{id}/fees</code></td><td>Queue a fee update</td></tr>
+<tr><td>GET</td><td><code>/v1/jobs/{jobId}</code></td><td>Job status, owner-scoped</td></tr>
+</tbody>
+</table>
+<p>Personas are chosen server-side from the invite: <code>TITLE_VENDOR</code>, <code>TPO_BROKER</code>, and read-only <code>AMC_VENDOR</code>. SSN, taxpayer ID, credit score, date of birth, income, assets, and liabilities are stripped at any depth before a response leaves the gateway.</p>
+</section>
+
+<section id="deploy">
+<h2>Deploy into your own AWS account</h2>
+<p>The whole stack is one CloudFormation file with the Lambda bundle inlined, under the 51,200-byte direct-upload limit. It provisions API Gateway, a usage plan, DynamoDB, SQS FIFO with a dead-letter queue, Secrets Manager, and a NAT gateway with a static Elastic IP for BytePro's firewall allowlist.</p>
+<pre><code>bash &lt;(curl -sSL https://raw.githubusercontent.com/Spuds0588/BytePro-Enterprise-Cloud-API-Passthrough-Middleware-Gateway/main/deploy.sh)</code></pre>
+<p>The installer asks for your BytePro URL, account code, and three service-account credentials, generates role invite codes, deploys the stack, and prints the gateway URL, portal URL, egress IP, and one invite link per role.</p>
+</section>
+
+<section id="verify">
+<h2>What is verified, and what is not</h2>
+<p class="note">This is shared infrastructure, not a vendor product. The maintainer has <strong>no BytePro access and no AWS account</strong> for this project, so live verification is a shared responsibility: every deployment that reports back improves it for everyone.</p>
+<div class="grid">
+<article class="card">
+<h3>Verified locally</h3>
+<p>Session login, caching, and 401 refresh; invite provisioning; persona masking; read projection and error mapping; FIFO fee and condition writes with retries; PDF upload, list, and download; validation failures; job ownership; the HTTP runtime; and the exact inline bundle in the template.</p>
+</article>
+<article class="card">
+<h3>Not verified</h3>
+<p>Any live BytePro call, any live AWS deployment, the real document and condition response shapes, and the NAT allowlist. Upstream routes follow the documented REST convention and are exercised only against the local fake.</p>
+</article>
+<article class="card">
+<h3>Known limits</h3>
+<p>180,000-byte uploads, no per-loan organization scoping, global per-role invite codes, no webhooks, no loan read cache, no full 1003 write, and no CORS. Each is recorded in <a href="https://github.com/Spuds0588/BytePro-Enterprise-Cloud-API-Passthrough-Middleware-Gateway/blob/main/todo.md">todo.md</a>.</p>
+</article>
+</div>
+</section>
+
+<section id="faq">
+<h2>FAQ</h2>
+<details><summary>Does the gateway store loan data or documents?</summary><p>No. It stores only tenant mappings, per-role session tokens, and job status. Document bytes travel inside an SQS message and are deleted with it.</p></details>
+<details><summary>Can a title company upload a title commitment?</summary><p>Yes. Title and broker keys can upload a base64 PDF, list loan documents, and download one by ID. The appraisal persona is read-only.</p></details>
+<details><summary>Why does <code>PATCH /v1/loans/{id}</code> return 501?</summary><p>A full 1003 loan-field write needs a real BytePro payload shape. Until a sanitized sample arrives, the gateway refuses rather than inventing a contract that looks tested.</p></details>
+<details><summary>Has this been verified against a live BytePro tenant?</summary><p>No. The maintainer has no BytePro access and no AWS account for this project. Behavior is verified locally against a fake BytePro API; deployment evidence must come from the community.</p></details>
+<details><summary>Does the gateway keep the BytePro service-account passwords?</summary><p>Only in AWS Secrets Manager, one secret per role. They are never in Lambda environment variables, responses, or logs.</p></details>
+<details><summary>How do I contribute?</summary><p>Open an issue with sanitized evidence, or a pull request with a regression test. The maintainer is happy to add contributors.</p></details>
+</section>
+
+<section id="community">
+<h2>Community maintained — contribute aggressively</h2>
+<p>This is an independent template, not a BytePro product. Issues and pull requests are the roadmap. Found a defect? <a href="https://github.com/Spuds0588/BytePro-Enterprise-Cloud-API-Passthrough-Middleware-Gateway/issues/new/choose">Open an issue</a> with a minimal reproduction and the commit you tested. Fixed something? <a href="https://github.com/Spuds0588/BytePro-Enterprise-Cloud-API-Passthrough-Middleware-Gateway/pulls">Send a pull request</a> with a regression test and updated docs.</p>
+<p>Validated a real BytePro payload or a deployment? Report the sanitized result on the relevant issue — that evidence is the most valuable contribution available. Want to help long term? Say so on your issue or PR.</p>
+<p><strong>Never include API keys, invite codes, passwords, session tokens, loan data, or borrower PII</strong> in an issue, PR, screenshot, or log. Private forks are discouraged: upstream the smallest fix so every deployment benefits.</p>
+<p>Read the <a href="https://github.com/Spuds0588/BytePro-Enterprise-Cloud-API-Passthrough-Middleware-Gateway/blob/main/CONTRIBUTING.md">contribution guide</a>, the <a href="https://github.com/Spuds0588/BytePro-Enterprise-Cloud-API-Passthrough-Middleware-Gateway/blob/main/agents.md">agent and developer manual</a>, the <a href="https://github.com/Spuds0588/BytePro-Enterprise-Cloud-API-Passthrough-Middleware-Gateway/blob/main/README.md">README</a>, or the machine-readable <a href="./llms.txt">llms.txt</a>.</p>
+</section>
+
+<footer>
+<p>MIT licensed. Not affiliated with Byte Software. Sister projects: <a href="https://github.com/Spuds0588/Encompass-API-Passhrough-Middleware-Gateway-">Encompass gateway</a> · <a href="https://github.com/Spuds0588/MeridianLink-Mortgage-API-Passthrough-Middleware-Gateway">MeridianLink gateway</a>.</p>
+</footer>
+</main>
+</body>
+</html>

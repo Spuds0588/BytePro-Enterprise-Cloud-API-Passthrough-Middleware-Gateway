@@ -1,0 +1,77 @@
+name: Bug report
+description: Report a defect with a sanitized reproduction.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. This project has no BytePro or AWS access, so a sanitized reproduction is the
+        only way a maintainer can act. Never include API keys, invite codes, passwords, session tokens, loan
+        data, or borrower PII.
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      description: Where did the behavior appear?
+      options:
+        - Local fake BytePro (mock/bytepro.js)
+        - Deployed AWS stack
+        - Real BytePro tenant
+        - Combination of the above
+        - Code inspection only
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Commit SHA tested
+      description: The exact commit you ran. Do not report against a private fork without saying so.
+      placeholder: 8b12819
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Minimal reproduction
+      description: The smallest command or request sequence that reproduces the problem, with secrets replaced.
+      placeholder: |
+        1. npm run dev
+        2. POST /portal with role=broker ...
+        3. GET /v1/loans/BYTE-1002948 ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual
+      description: What you expected, what happened, and the sanitized response or log line.
+    validations:
+      required: true
+  - type: textarea
+    id: verify_result
+    attributes:
+      label: npm run verify output
+      description: Paste the tail of the output. If it cannot run, say why.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence
+      description: Structured logs, status codes, or a redacted payload. Remove loan data and identifiers.
+    validations:
+      required: true
+  - type: checkboxes
+    id: redaction
+    attributes:
+      label: Redaction and honesty
+      options:
+        - label: I removed API keys, invite codes, passwords, and session tokens.
+          required: true
+        - label: I removed loan data and borrower PII.
+          required: true
+        - label: I did not include production loan data.
+          required: true
+        - label: I have not claimed verification that I did not perform.
+          required: true

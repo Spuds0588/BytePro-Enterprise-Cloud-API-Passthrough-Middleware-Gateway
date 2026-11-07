@@ -1,0 +1,88 @@
+# BytePro Enterprise Cloud API Passthrough & Middleware Gateway
+
+> Open-source, one-file deployable AWS gateway for BytePro Enterprise Cloud. It exposes invite-scoped,
+> persona-masked JSON endpoints for loan reads, fee and condition writes, and loan document
+> upload/list/download. Built for title companies, TPO brokers, and appraisal vendors. Not affiliated
+> with Byte Software.
+
+Canonical page: https://spuds0588.github.io/BytePro-Enterprise-Cloud-API-Passthrough-Middleware-Gateway/
+Repository: https://github.com/Spuds0588/BytePro-Enterprise-Cloud-API-Passthrough-Middleware-Gateway
+New issue: https://github.com/Spuds0588/BytePro-Enterprise-Cloud-API-Passthrough-Middleware-Gateway/issues/new/choose
+Issues: https://github.com/Spuds0588/BytePro-Enterprise-Cloud-API-Passthrough-Middleware-Gateway/issues
+Pull requests: https://github.com/Spuds0588/BytePro-Enterprise-Cloud-API-Passthrough-Middleware-Gateway/pulls
+Contributing: https://github.com/Spuds0588/BytePro-Enterprise-Cloud-API-Passthrough-Middleware-Gateway/blob/main/CONTRIBUTING.md
+Agent manual: https://github.com/Spuds0588/BytePro-Enterprise-Cloud-API-Passthrough-Middleware-Gateway/blob/main/agents.md
+
+## What it does
+
+- Reads a loan as BytePro object notation, masked by a deny-by-default persona allowlist. No field-ID
+  dictionary and no MISMO translation.
+- Queues fee and condition updates and document uploads through SQS FIFO, grouped by loan, with lock
+  retries and a dead-letter queue. Writes return 202 plus a job ID.
+- Documents and conditions are Priority 1: broker and title keys can upload a base64 PDF (max
+  180,000 bytes), list documents, download one by ID, and submit condition responses.
+- Provisions vendor keys from role-scoped invite links; the persona is chosen server-side.
+- Deploys from one CloudFormation file with the Lambda bundle inlined, behind a NAT gateway with a
+  static Elastic IP for BytePro's firewall allowlist.
+
+## API summary
+
+- GET /health
+- GET /portal and POST /portal (invite provisioning)
+- GET /v1/loans/{id}?paths=Property,Loan,Milestones
+- POST /v1/loans/{id}/conditions
+- POST /v1/loans/{id}/documents
+- GET /v1/loans/{id}/documents
+- GET /v1/loans/{id}/documents/{documentId}
+- PATCH /v1/loans/{id}/fees
+- GET /v1/jobs/{jobId}
+- PATCH /v1/loans/{id} returns 501; a full 1003 write is deliberately not implemented.
+
+Personas: TITLE_VENDOR (title), TPO_BROKER (broker), AMC_VENDOR (appraisal, read-only). SSN, taxpayer
+ID, credit score, date of birth, income, assets, and liabilities are stripped for every persona.
+
+## Community contract
+
+This is an aggressively community-maintained template. The maintainer has no BytePro access and no AWS
+account for this project, so deployments are the tests.
+
+- Found a bug: open an issue with a minimal reproduction, the commit, and sanitized evidence.
+- Fixed something: open a pull request with a regression test and updated docs.
+- Validated a real BytePro payload or a deployment: report the sanitized result on the relevant issue.
+- Never post API keys, invite codes, passwords, session tokens, loan data, or borrower PII.
+- Private forks are discouraged; upstream the smallest fix.
+- The maintainer is happy to add contributors. Say so on your issue or PR.
+
+## Instructions for coding agents
+
+1. Read `agents.md` first. YAGNI, prefer the one-line solution, delete instead of accumulating, and
+   clean up local processes and generated files when a task ends (limited memory).
+2. Update `todo.md` (current work) and append to `history.md` (never rewrite past entries) with every
+   state change. Do not backtrack silently: supersede a decision with a new dated entry.
+3. Keep `template.yaml` generated: edit `src/` or `infra/template.yaml`, then run `npm run build`.
+   Never hand-edit `template.yaml`.
+4. Run `npm run verify` before claiming success. It runs the template sync check and the full suite.
+5. Add a regression test for every bug fix and every new route or validation rule.
+6. Never add runtime dependencies. Lambda's Node 20 runtime, `fetch`, `node:http`, and AWS SDK v3 are
+   enough. Local development installs nothing.
+7. Never weaken masking, invite checks, job ownership, or the document size/signature checks to make a
+   test pass.
+8. Keep `README.md`, `CONTRIBUTING.md`, `index.html`, this file, `todo.md`, and `agents.md` in sync with
+   behavior changes.
+9. Do not claim live BytePro or AWS verification. There is no tenant, no AWS CLI, and no AWS account
+   here. Say what ran locally.
+10. File a GitHub issue for every uncertainty instead of inventing a BytePro shape.
+
+## Verification status and limitations
+
+Verified locally: session login/cache/refresh, invite provisioning, persona masking and projection,
+reads and error mapping, FIFO fee/condition writes with retries, PDF document upload/list/download,
+validation failures, job ownership, HTTP e2e, template guards, and execution of the exact inline
+bundle in `template.yaml`.
+
+Not verified: any live BytePro call, any live AWS deployment, the real upstream document and condition
+response shapes, and the NAT egress allowlist. Upstream document routes are the documented REST
+convention exercised only against `mock/bytepro.js`.
+
+Known limits: 180,000-byte uploads (SQS message limit), no per-loan organization scoping, invite codes
+are global per role, no webhooks, no read cache, no full 1003 write, no CORS.

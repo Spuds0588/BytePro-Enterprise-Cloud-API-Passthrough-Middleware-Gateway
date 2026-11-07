@@ -1,0 +1,689 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: BytePro Enterprise Cloud API passthrough gateway (masking, FIFO writes, documents, conditions, invite portal, static egress IP).
+
+Parameters:
+  ByteBaseUrl:
+    Type: String
+    Default: https://api.bytesoftware.com/api/v1
+  ByteAccountCode:
+    Type: String
+    MinLength: 1
+  TitleUsername:
+    Type: String
+    MinLength: 1
+  TitlePassword:
+    Type: String
+    NoEcho: true
+    MinLength: 1
+  BrokerUsername:
+    Type: String
+    MinLength: 1
+  BrokerPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 1
+  AppraisalUsername:
+    Type: String
+    MinLength: 1
+  AppraisalPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 1
+  TitleInviteCode:
+    Type: String
+    NoEcho: true
+    MinLength: 24
+  BrokerInviteCode:
+    Type: String
+    NoEcho: true
+    MinLength: 24
+  AppraisalInviteCode:
+    Type: String
+    NoEcho: true
+    MinLength: 24
+  LogRetentionInDays:
+    Type: Number
+    Default: 30
+    MinValue: 1
+    MaxValue: 3653
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.42.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.42.0.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.42.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  VpcGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  NatEip:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    DependsOn: VpcGatewayAttachment
+    Properties:
+      AllocationId: !GetAtt NatEip.AllocationId
+      SubnetId: !Ref PublicSubnet
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VpcGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  PrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet
+      RouteTableId: !Ref PrivateRouteTable
+
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Gateway Lambda egress only
+      VpcId: !Ref Vpc
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+
+  TitleSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${AWS::StackName}/bytepro-title-password"
+      SecretString: !Ref TitlePassword
+
+  BrokerSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${AWS::StackName}/bytepro-broker-password"
+      SecretString: !Ref BrokerPassword
+
+  AppraisalSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${AWS::StackName}/bytepro-appraisal-password"
+      SecretString: !Ref AppraisalPassword
+
+  TenantsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: apiKeyId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: apiKeyId
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+
+  SessionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: role
+          AttributeType: S
+      KeySchema:
+        - AttributeName: role
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  JobsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: jobId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: jobId
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${AWS::StackName}-writes-dlq.fifo"
+      FifoQueue: true
+      MessageRetentionPeriod: 1209600
+
+  WriteQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${AWS::StackName}-writes.fifo"
+      FifoQueue: true
+      ContentBasedDeduplication: false
+      VisibilityTimeout: 120
+      MessageRetentionPeriod: 1209600
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DeadLetterQueue.Arn
+        maxReceiveCount: 5
+
+  GatewayRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: gateway-access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                Resource:
+                  - !GetAtt TenantsTable.Arn
+                  - !GetAtt SessionsTable.Arn
+                  - !GetAtt JobsTable.Arn
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:ChangeMessageVisibility
+                  - sqs:GetQueueAttributes
+                Resource:
+                  - !GetAtt WriteQueue.Arn
+                  - !GetAtt DeadLetterQueue.Arn
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref TitleSecret
+                  - !Ref BrokerSecret
+                  - !Ref AppraisalSecret
+              - Effect: Allow
+                Action:
+                  - apigateway:GET
+                  - apigateway:POST
+                  - apigateway:PUT
+                  - apigateway:PATCH
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}::/apikeys"
+                  - !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}::/usageplans/${UsagePlan}/keys"
+                  - !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}::/usageplans/${UsagePlan}/keys/*"
+              - Effect: Allow
+                Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DeleteNetworkInterface
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-gateway:*"
+
+  GatewayLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${GatewayFunction}"
+      RetentionInDays: !Ref LogRetentionInDays
+
+  GatewayFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-gateway"
+      Runtime: nodejs20.x
+      Handler: index.handler
+      Architectures:
+        - arm64
+      MemorySize: 256
+      Timeout: 29
+      Role: !GetAtt GatewayRole.Arn
+      VpcConfig:
+        SubnetIds:
+          - !Ref PrivateSubnet
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+      Environment:
+        Variables:
+          BYTE_BASE_URL: !Ref ByteBaseUrl
+          BYTE_ACCOUNT_CODE: !Ref ByteAccountCode
+          BYTE_TITLE_USERNAME: !Ref TitleUsername
+          BYTE_BROKER_USERNAME: !Ref BrokerUsername
+          BYTE_APPRAISAL_USERNAME: !Ref AppraisalUsername
+          BYTE_TITLE_SECRET_ARN: !Ref TitleSecret
+          BYTE_BROKER_SECRET_ARN: !Ref BrokerSecret
+          BYTE_APPRAISAL_SECRET_ARN: !Ref AppraisalSecret
+          TENANT_TABLE: !Ref TenantsTable
+          SESSION_TABLE: !Ref SessionsTable
+          JOB_TABLE: !Ref JobsTable
+          WRITE_QUEUE_URL: !Ref WriteQueue
+          USAGE_PLAN_ID: !Ref UsagePlan
+          INVITE_TITLE: !Ref TitleInviteCode
+          INVITE_BROKER: !Ref BrokerInviteCode
+          INVITE_APPRAISAL: !Ref AppraisalInviteCode
+          UPSTREAM_TIMEOUT_MS: "8000"
+      Code:
+        ZipFile: |
+         "use strict";const __nativeRequire=require;const __defs={"lambda.js":(module,exports,require)=>{const{createApp}=require("./app");const{createByte}=require("./byte");const{processWrite}=require("./writes");const{log}=require("./log");function createHandler({store,env=process.env,byte,now=()=>Date.now()}){const client=byte||createByte({store,env,timeoutMs:Number(env.UPSTREAM_TIMEOUT_MS)||undefined});const app=createApp({store,byte:client,env,now});async function handleQueue(records){const batchItemFailures=[];for(const record of records){const attempts=Number(record.attributes?.ApproximateReceiveCount)||1;let jobId;try{const message=JSON.parse(record.body||"{}");jobId=message.jobId;await processWrite({job:await store.getJob(message.jobId),kind:message.kind,payload:message.payload,byte:client,store,attempts,now});}catch(err){log("WARN","WRITE_RETRY_SCHEDULED",{jobId,messageId:record.messageId,attempts,message:err.message});batchItemFailures.push({itemIdentifier:record.messageId});}}return{batchItemFailures};}return async function handler(event={}){if(Array.isArray(event.Records)&&event.Records[0]?.eventSource==="aws:sqs")return handleQueue(event.Records);return app.handle(event);};}let defaultHandler=null;exports.handler=async(event,context)=>{if(!defaultHandler){const{createAwsStore}=require("./aws-store");defaultHandler=createHandler({store:createAwsStore(process.env)});}return defaultHandler(event,context);};exports.createHandler=createHandler;},"app.js":(module,exports,require)=>{const{randomUUID}=require("node:crypto");const{log}=require("./log");const{mask}=require("./mask");const{loanData,documentList,documentContent}=require("./byte");const{roleFor,safeEqual}=require("./roles");const{renderPortal}=require("./portal");const MAX_ITEMS=100;const DEFAULT_PATHS="Property,Loan,Borrower,Milestones,Conditions,Fees,CustomFields";const MAX_DOCUMENT_BYTES=180_000;const JOB_TTL_SECONDS=30*24*60*60;const ROOT=/^[A-Za-z][A-Za-z0-9]{0,40}$/;const MAX_ROOTS=10;const WRITE_PERSONAS={fees:["TITLE_VENDOR","TPO_BROKER"],conditions:["TITLE_VENDOR","TPO_BROKER"],documents:["TITLE_VENDOR","TPO_BROKER"]};const DOCUMENT_PERSONAS=["TITLE_VENDOR","TPO_BROKER"];const OPERATION={fees:"write fees",conditions:"submit conditions",documents:"upload documents"};const json=(statusCode,body,headers={})=>({statusCode,headers:{"Content-Type":"application/json","Cache-Control":"no-store",...headers},body:JSON.stringify(body)});const error=(statusCode,message,extra={})=>json(statusCode,{error:message,...extra});const html=(statusCode,body)=>({statusCode,headers:{"Content-Type":"text/html; charset=utf-8","Cache-Control":"no-store","Content-Security-Policy":"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'","X-Frame-Options":"DENY"},body});const decode=(value)=>{try{return decodeURIComponent(value);}catch{return value;}};const parseRoots=(raw)=>{const roots=[...new Set(String(raw||DEFAULT_PATHS).split(",").map((root)=>root.trim()).filter(Boolean))];return roots.length&&roots.length<=MAX_ROOTS&&roots.every((root)=>ROOT.test(root))?roots:null;};const validFees=(fees)=>Array.isArray(fees)&&fees.length>0&&fees.length<=MAX_ITEMS&&fees.every((fee)=>typeof fee?.feeType==="string"&&fee.feeType.trim().length>0&&fee.feeType.length<=100&&Number.isFinite(fee.amount)&&fee.amount>=0&&(fee.paidTo===undefined||(typeof fee.paidTo==="string"&&fee.paidTo.length<=200)));const validConditions=(conditions)=>Array.isArray(conditions)&&conditions.length>0&&conditions.length<=MAX_ITEMS&&conditions.every((condition)=>typeof condition?.description==="string"&&condition.description.trim().length>0&&condition.description.length<=200&&typeof condition?.status==="string"&&condition.status.trim().length>0&&condition.status.length<=50&&(condition.category===undefined||(typeof condition.category==="string"&&condition.category.length<=100))&&(condition.borrowerVisible===undefined||typeof condition.borrowerVisible==="boolean"));const parsePdf=(content)=>{if(typeof content!=="string"||!content.trim())return{error:[400,"contentBase64 is required"]};const clean=content.replace(/\s+/g,"");if(clean.length%4!==0||!/^[A-Za-z0-9+/]+={0,2}$/.test(clean))return{error:[400,"contentBase64 must be valid base64"]};const bytes=Buffer.from(clean,"base64");if(!bytes.subarray(0,5).equals(Buffer.from("%PDF-")))return{error:[415,"Only PDF content is supported"]};if(bytes.length>MAX_DOCUMENT_BYTES){return{error:[413,`Document exceeds ${MAX_DOCUMENT_BYTES} bytes (SQS message limit)`,{maxBytes:MAX_DOCUMENT_BYTES}]};}return{content:clean,bytes:bytes.length};};const upstreamError=(status,loanId)=>{if(status===423)return error(423,"Loan is locked by BytePro",{code:"FILE_LOCKED"});if(status===404)return error(404,"Loan or document not found");if(status===429)return error(429,"BytePro rate limit reached");if(status===401||status===403)return error(502,"BytePro rejected gateway credentials");if(status>=500)return error(502,"BytePro unavailable");if(status>=300)return error(400,"BytePro rejected the request",{upstreamStatus:status,loanId});return null;};function createApp({store,byte,env=process.env,now=()=>Date.now()}){if(!store)throw new Error("createApp requires a store");const tenantFor=async(apiKeyId)=>(apiKeyId?(await store.getTenant(apiKeyId))||null:null);async function readLoan(event,apiKeyId,loanId){const tenant=await tenantFor(apiKeyId);if(!tenant)return error(403,"Unauthorized tenant mapping");const roots=parseRoots(event.queryStringParameters?.paths);if(!roots)return error(400,`paths must be 1-${MAX_ROOTS} comma-separated root objects (Property, Loan, Milestones)`);let upstream;try{upstream=await byte.getLoan(tenant.role,loanId,roots.join(","));}catch(err){log("ERROR","BYTEPRO_READ_FAILED",{loanId,message:err.message});return error(err.name==="TimeoutError"?504:502,"BytePro request failed");}log("INFO","BYTEPRO_READ_COMPLETE",{loanId,status:upstream.status,persona:tenant.persona});const failed=upstreamError(upstream.status,loanId);if(failed)return failed;const data=loanData(upstream.body);if(!data||typeof data!=="object")return error(502,"Invalid BytePro response");const masked=mask(data,tenant.persona,roots);if(!masked)return error(403,`Persona ${tenant.persona} has no schema allowlist`);log("INFO","SCHEMA_MASKING_APPLIED",{loanId,persona:tenant.persona,roots:roots.length});return json(200,{loanId,data:masked.data,_cached:false},{"Cache-Control":"private, max-age=15"});}async function enqueueWrite(event,apiKeyId,loanId,kind){const tenant=await tenantFor(apiKeyId);if(!tenant)return error(403,"Unauthorized tenant mapping");if(!WRITE_PERSONAS[kind].includes(tenant.persona))return error(403,`Persona cannot ${OPERATION[kind]}`);let body;try{body=JSON.parse(event.body||"");}catch{return error(400,"Invalid JSON body");}let payload;if(kind==="documents"){if(typeof body?.documentType!=="string"||!body.documentType.trim()||body.documentType.length>100){return error(400,"documentType is required (max 100 chars)");}if(body.notes!==undefined&&(typeof body.notes!=="string"||body.notes.length>500)){return error(400,"notes must be a string (max 500 chars)");}const pdf=parsePdf(body?.contentBase64);if(pdf.error)return error(pdf.error[0],pdf.error[1],pdf.error[2]);payload={documentType:body.documentType.trim(),notes:String(body.notes||"").trim(),contentBase64:pdf.content};}else if(kind==="conditions"){if(!validConditions(body?.conditions))return error(400,"Body must contain a non-empty conditions array (max 100)");payload={Conditions:body.conditions.map((condition)=>({Description:condition.description.trim(),Status:condition.status.trim(),...(condition.category===undefined?{}:{Category:condition.category}),...(condition.borrowerVisible===undefined?{}:{BorrowerVisible:condition.borrowerVisible})}))};}else{if(!validFees(body?.fees))return error(400,"Body must contain a non-empty fees array (max 100)");payload={Fees:body.fees.map((fee)=>({FeeType:fee.feeType.trim(),Amount:fee.amount,...(fee.paidTo===undefined?{}:{PaidTo:fee.paidTo})}))};}const createdAt=new Date(now()).toISOString();const job={jobId:`job_${randomUUID()}`,loanId,apiKeyId,tenantName:tenant.tenantName,persona:tenant.persona,role:tenant.role,kind,status:"PENDING",attempts:0,error:null,createdAt,updatedAt:createdAt,ttl:Math.floor(now()/1000)+JOB_TTL_SECONDS};await store.putJob(job);try{await store.enqueueWrite({jobId:job.jobId,loanId,kind,payload});}catch(err){await store.putJob({...job,status:"FAILED",error:"Queue unavailable",updatedAt:new Date(now()).toISOString()});log("ERROR","WRITE_ENQUEUE_FAILED",{jobId:job.jobId,loanId,message:err.message});return error(503,"Write queue unavailable");}log("INFO","WRITE_ENQUEUED",{jobId:job.jobId,loanId,tenantName:tenant.tenantName,kind});return json(202,{status:"ACCEPTED",jobId:job.jobId,loanId,statusUrl:`/v1/jobs/${job.jobId}`});}async function readDocuments(apiKeyId,loanId,documentId){const tenant=await tenantFor(apiKeyId);if(!tenant)return error(403,"Unauthorized tenant mapping");if(!DOCUMENT_PERSONAS.includes(tenant.persona))return error(403,"Persona cannot read documents");let upstream;try{upstream=documentId?await byte.downloadDocument(tenant.role,loanId,documentId):await byte.listDocuments(tenant.role,loanId);}catch(err){log("ERROR","BYTEPRO_DOCUMENT_FAILED",{loanId,message:err.message});return error(err.name==="TimeoutError"?504:502,"BytePro document request failed");}log("INFO","BYTEPRO_DOCUMENT_READ",{loanId,status:upstream.status,single:Boolean(documentId)});const failed=upstreamError(upstream.status,loanId);if(failed)return failed;if(documentId){const contentBase64=documentContent(upstream.body);if(!contentBase64)return error(502,"BytePro returned no document content");return json(200,{documentId,contentType:"application/pdf",contentBase64});}return json(200,{loanId,documents:documentList(upstream.body)},{"Cache-Control":"private, max-age=15"});}async function jobStatus(apiKeyId,jobId){const tenant=await tenantFor(apiKeyId);if(!tenant)return error(403,"Unauthorized tenant mapping");const job=await store.getJob(jobId);if(!job||job.apiKeyId!==apiKeyId)return error(404,"Job not found");return json(200,{jobId:job.jobId,loanId:job.loanId,kind:job.kind,status:job.status,attempts:job.attempts,createdAt:job.createdAt,updatedAt:job.updatedAt,error:job.error||null});}async function provision(event,requestId){let payload;try{payload=JSON.parse(event.body||"");}catch{return error(400,"Invalid JSON body");}const role=String(payload?.role||"").trim().toLowerCase();const config=roleFor(env,role);if(!config||!safeEqual(String(payload?.code||""),config.code)){log("WARN","PORTAL_INVITE_REJECTED",{requestId,role:role||"unknown"});return error(403,"Invalid or expired invite link");}const tenantName=String(payload.tenantName||"").trim();const email=String(payload.email||"").trim();if(!tenantName||tenantName.length>100)return error(400,"tenantName is required (max 100 chars)");if(!email||email.length>254||!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email))return error(400,"A valid email is required");const key=await store.createApiKey({tenantName});await store.putTenant({apiKeyId:key.id,tenantName,email,role,persona:config.persona,status:"ACTIVE",createdAt:new Date(now()).toISOString()});log("INFO","TENANT_PROVISIONED",{tenantName,role,persona:config.persona,apiKeyId:key.id});return json(200,{message:"Tenant provisioned successfully",apiKey:key.value,tenantName,email,role,persona:config.persona});}async function handle(event={}){const method=String(event.httpMethod||event.requestContext?.http?.method||"GET").toUpperCase();const path=event.path||event.rawPath||"/";const requestId=event.requestContext?.requestId;const apiKeyId=event.requestContext?.identity?.apiKeyId;const started=now();log("INFO","REQUEST_RECEIVED",{requestId,method,path});try{if(method==="GET"&&path==="/health")return json(200,{status:"ok",system:"ByteProGateway"});if(path==="/portal"){if(method==="POST")return await provision(event,requestId);if(method!=="GET")return error(405,"Method not allowed");const role=String(event.queryStringParameters?.role||"").trim().toLowerCase();const code=String(event.queryStringParameters?.code||"");if(!role&&!code)return html(200,renderPortal());const config=roleFor(env,role);if(!config||!safeEqual(code,config.code)){log("WARN","PORTAL_INVITE_REJECTED",{requestId,role:role||"unknown"});return html(403,renderPortal({error:"This invite link is invalid or has expired."}));}return html(200,renderPortal({role:config,code}));}let match;if((match=/^\/v1\/loans\/([^/]+)\/fees$/.exec(path))){if(method!=="PATCH")return error(405,"Method not allowed");return await enqueueWrite(event,apiKeyId,decode(match[1]),"fees");}if((match=/^\/v1\/loans\/([^/]+)\/conditions$/.exec(path))){if(method!=="POST")return error(405,"Method not allowed");return await enqueueWrite(event,apiKeyId,decode(match[1]),"conditions");}if((match=/^\/v1\/loans\/([^/]+)\/documents$/.exec(path))){if(method==="POST")return await enqueueWrite(event,apiKeyId,decode(match[1]),"documents");if(method==="GET")return await readDocuments(apiKeyId,decode(match[1]));return error(405,"Method not allowed");}if((match=/^\/v1\/loans\/([^/]+)\/documents\/([^/]+)$/.exec(path))){if(method!=="GET")return error(405,"Method not allowed");return await readDocuments(apiKeyId,decode(match[1]),decode(match[2]));}if((match=/^\/v1\/loans\/([^/]+)$/.exec(path))){const loanId=decode(match[1]);if(method==="GET")return await readLoan(event,apiKeyId,loanId);if(method==="PATCH")return error(501,"Only fee, condition, and document writes are supported; 1003 loan-field writes are not implemented");return error(405,"Method not allowed");}if((match=/^\/v1\/jobs\/([^/]+)$/.exec(path))){if(method!=="GET")return error(405,"Method not allowed");return await jobStatus(apiKeyId,decode(match[1]));}return error(404,"Not found");}catch(err){log("ERROR","HANDLER_EXCEPTION",{requestId,method,path,message:err.message,stack:err.stack});return error(500,"Internal gateway error");}finally{log("INFO","REQUEST_COMPLETE",{requestId,method,path,durationMs:now()-started});}}return{handle};}module.exports={createApp,parsePdf,MAX_DOCUMENT_BYTES};},"log.js":(module,exports,require)=>{const log=(level,action,details={})=>console.log(JSON.stringify({timestamp:new Date().toISOString(),system:"ByteProGateway",level,action,...details}));module.exports={log};},"mask.js":(module,exports,require)=>{const PERSONAS={TITLE_VENDOR:["Property.Street","Property.City","Property.State","Property.Zip","Property.County","Property.LegalDescription","Loan.BaseLoanAmount","Loan.InterestRate","Loan.LoanType","Loan.LoanPurpose","Loan.LTV","Loan.CLTV","Milestones.CurrentStatus","Milestones.ClosingDate","Fees","Conditions","CustomFields"],TPO_BROKER:["Property","Loan","Borrower.FirstName","Borrower.LastName","Borrower.Email","Borrower.HomePhone","Borrower.MailingAddress","Milestones","Conditions","Fees","CustomFields"],AMC_VENDOR:["Property.Street","Property.City","Property.State","Property.Zip","Property.County","Property.LegalDescription","Loan.BaseLoanAmount","Loan.LoanType","Loan.LoanPurpose","Milestones.CurrentStatus"]};const BLOCKED=/(ssn|socialsecurity|taxpayer|credit|dateofbirth|birthdate|income|assets|liabilities|declarations)/i;function pick(value,paths){if(value===null||value===undefined)return undefined;if(!paths.length)return undefined;if(paths.includes(""))return sanitize(value);if(Array.isArray(value))return value.map((item)=>pick(item,paths)).filter((item)=>item!==undefined);if(typeof value!=="object")return undefined;const out={};for(const[key,child]of Object.entries(value)){if(BLOCKED.test(key))continue;const whole=paths.includes(key);const nested=paths.filter((path)=>path.startsWith(`${key}.`)).map((path)=>path.slice(key.length+1));if(whole)out[key]=sanitize(child);else if(nested.length){const masked=pick(child,nested);if(masked!==undefined&&!(masked&&typeof masked==="object"&&!Array.isArray(masked)&&!Object.keys(masked).length)){out[key]=masked;}}}return out;}function sanitize(value){if(Array.isArray(value))return value.map(sanitize);if(!value||typeof value!=="object")return value;return Object.fromEntries(Object.entries(value).filter(([key])=>!BLOCKED.test(key)).map(([key,child])=>[key,sanitize(child)]));}function mask(loan,persona,roots){const paths=PERSONAS[persona];if(!paths)return null;const selected=roots?.length?paths.filter((path)=>roots.includes(path.split(".")[0])):paths;return selected.length?{data:pick(loan,selected)||{}}:null;}module.exports={PERSONAS,mask,pick,sanitize};},"byte.js":(module,exports,require)=>{const{log}=require("./log");const{roleFor}=require("./roles");const REFRESH_MS=25*60_000;const SESSION_FLOOR_MS=60_000;const parseJson=(text)=>{try{return JSON.parse(text);}catch{return null;}};const createByte=({store,env=process.env,timeoutMs=8000,fetchImpl=fetch,now=()=>Date.now()})=>{const base=()=>String(env.BYTE_BASE_URL||"").replace(/\/+$/,"");const send=(path,init,token)=>fetchImpl(`${base()}${path}`,{...init,headers:{"Content-Type":"application/json",Authorization:`Bearer ${token}`,...init.headers},signal:AbortSignal.timeout(timeoutMs)});async function session(role,force=false){const config=roleFor(env,role);if(!config)throw new Error(`Unknown BytePro role: ${role}`);if(!force){const cached=await store.getSession(role);if(cached?.token&&cached.expiresAt>now()+SESSION_FLOOR_MS){log("INFO","SESSION_CACHE_HIT",{role});return cached.token;}}const password=await store.getSecret(env[config.secretEnv]);if(!password)throw new Error(`No BytePro password configured for role: ${role}`);log("INFO","SESSION_LOGIN_REQUEST",{role});const response=await fetchImpl(`${base()}/session`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({accountCode:env.BYTE_ACCOUNT_CODE,username:env[config.userEnv],password}),signal:AbortSignal.timeout(timeoutMs)});if(!response.ok){log("ERROR","BYTE_LOGIN_FAILED",{role,status:response.status});throw new Error(`BytePro authentication failed: ${response.status}`);}const body=await response.json().catch(()=>({}));const token=body.sessionToken||body.token;if(!token)throw new Error("BytePro login returned no session token");const lifetime=Math.min((Number(body.expiresIn)||1800)*1000-SESSION_FLOOR_MS,REFRESH_MS);const expiresAt=now()+Math.max(lifetime,SESSION_FLOOR_MS);await store.putSession({role,token,expiresAt,ttl:Math.ceil(expiresAt/1000)});log("INFO","SESSION_LOGIN_SUCCESS",{role,expiresAt});return token;}async function call(role,path,init={}){const token=await session(role);const response=await send(path,init,token);if(response.status!==401)return{status:response.status,body:await response.text()};log("WARN","SESSION_INVALIDATED_RETRYING",{role});const retry=await send(path,init,await session(role,true));return{status:retry.status,body:await retry.text()};}return{getLoan:(role,loanId,paths)=>call(role,`/loans/${encodeURIComponent(loanId)}${paths ? `?paths=${encodeURIComponent(paths)}` : ""}`),updateLoan:(role,loanId,data)=>call(role,`/loans/${encodeURIComponent(loanId)}`,{method:"PATCH",body:JSON.stringify({data})}),listDocuments:(role,loanId)=>call(role,`/loans/${encodeURIComponent(loanId)}/documents`),downloadDocument:(role,loanId,documentId)=>call(role,`/loans/${encodeURIComponent(loanId)}/documents/${encodeURIComponent(documentId)}`),uploadDocument:(role,loanId,doc)=>call(role,`/loans/${encodeURIComponent(loanId)}/documents`,{method:"POST",body:JSON.stringify(doc)})};};const loanData=(body)=>parseJson(body)?.data??parseJson(body);const documentList=(body)=>{const parsed=parseJson(body);const rows=Array.isArray(parsed)?parsed:parsed?.documents??parsed?.Documents??[];return rows.map((doc)=>({id:doc?.id??doc?.documentId??doc?.DocumentId??null,documentType:doc?.documentType??doc?.DocumentType??doc?.type??null,fileName:doc?.fileName??doc?.FileName??doc?.name??null,notes:doc?.notes??doc?.Notes??null,uploadedAt:doc?.uploadedAt??doc?.UploadedAt??doc?.uploadedDate??null})).filter((doc)=>doc.id!==null&&doc.id!==undefined).map((doc)=>({...doc,id:String(doc.id)}));};const documentContent=(body)=>{const parsed=parseJson(body);const content=parsed?.contentBase64??parsed?.content??parsed?.data??(parsed===null?body:null);return typeof content==="string"&&content.trim()?content.replace(/\s+/g,""):null;};module.exports={createByte,loanData,documentList,documentContent};},"roles.js":(module,exports,require)=>{const{timingSafeEqual}=require("node:crypto");const ROLES={title:{label:"Title / Settlement",persona:"TITLE_VENDOR",codeEnv:"INVITE_TITLE",userEnv:"BYTE_TITLE_USERNAME",secretEnv:"BYTE_TITLE_SECRET_ARN"},broker:{label:"TPO / Broker",persona:"TPO_BROKER",codeEnv:"INVITE_BROKER",userEnv:"BYTE_BROKER_USERNAME",secretEnv:"BYTE_BROKER_SECRET_ARN"},appraisal:{label:"AMC / Appraisal",persona:"AMC_VENDOR",codeEnv:"INVITE_APPRAISAL",userEnv:"BYTE_APPRAISAL_USERNAME",secretEnv:"BYTE_APPRAISAL_SECRET_ARN"}};const safeEqual=(a,b)=>{const left=Buffer.from(String(a));const right=Buffer.from(String(b));return left.length===right.length&&timingSafeEqual(left,right);};const roleFor=(env,role)=>{const config=ROLES[role];const code=config&&env[config.codeEnv];return config&&code?{...config,role,code}:null;};module.exports={ROLES,roleFor,safeEqual};},"portal.js":(module,exports,require)=>{const REPO="https://github.com/Spuds0588/BytePro-Enterprise-Cloud-API-Passthrough-Middleware-Gateway";const escape=(value)=>String(value).replace(/[&<>"']/g,(char)=>`&#${char.charCodeAt(0)};`);const PATHS=[["Property.Street","Subject property address"],["Property.LegalDescription","Legal description (title and appraisal personas)"],["Loan.BaseLoanAmount","Base loan amount"],["Loan.InterestRate","Note rate"],["Loan.LoanType","Loan type (Conventional, FHA, VA, ...)"],["Milestones.CurrentStatus","Current loan milestone"],["Milestones.ClosingDate","Scheduled closing date"],["Fees","Fee array (FeeType, Amount, PaidTo)"],["Conditions","Condition array (Description, Status, Category)"]];const ROUTES=[["GET","/v1/loans/{loanId}?paths=Property,Loan,Milestones","Masked loan object"],["PATCH","/v1/loans/{loanId}/fees","Queue a fee update"],["POST","/v1/loans/{loanId}/conditions","Submit condition responses"],["POST","/v1/loans/{loanId}/documents","Queue a base64 PDF upload"],["GET","/v1/loans/{loanId}/documents","List loan documents"],["GET","/v1/loans/{loanId}/documents/{documentId}","Download one PDF"],["GET","/v1/jobs/{jobId}","Write job status"]];const renderPortal=({role,code,error}={})=>`<!doctype html>
+         <html lang="en">
+         <head>
+         <meta charset="utf-8">
+         <meta name="viewport" content="width=device-width, initial-scale=1">
+         <title>BytePro Gateway — Vendor Access</title>
+         <meta name="robots" content="noindex">
+         <style>
+         :root{color-scheme:light dark;--ink:#101828;--muted:#475467;--line:#d0d5dd;--bg:#fff;--accent:#0b4f6c}
+         @media (prefers-color-scheme:dark){:root{--ink:#e4e7ec;--muted:#98a2b3;--line:#344054;--bg:#0d1117;--accent:#7cc4e0}}
+         *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 system-ui,-apple-system,Segoe UI,sans-serif}
+         main{max-width:62rem;margin:0 auto;padding:2.5rem 1.25rem 4rem}h1{font-size:1.75rem;margin:0 0 .35rem}h2{font-size:1.15rem;margin:2.25rem 0 .75rem}
+         p{color:var(--muted);max-width:48rem}code{font:.86em ui-monospace,SFMono-Regular,Menlo,monospace;background:rgba(127,127,127,.14);padding:.1rem .3rem;border-radius:4px}
+         table{width:100%;border-collapse:collapse;font-size:.9rem}th,td{text-align:left;padding:.5rem .6rem;border-bottom:1px solid var(--line);vertical-align:top}
+         form{display:grid;gap:.9rem;max-width:26rem;margin-top:1rem}label{display:grid;gap:.3rem;font-weight:600;font-size:.9rem}
+         input{font:inherit;padding:.6rem .7rem;border:1px solid var(--line);border-radius:8px;background:transparent;color:inherit}
+         button{font:inherit;font-weight:650;padding:.7rem 1rem;border:0;border-radius:8px;background:var(--accent);color:#fff;cursor:pointer}
+         pre#out{white-space:pre-wrap;word-break:break-all;border:1px solid var(--line);border-radius:8px;padding:1rem;min-height:3rem;background:rgba(127,127,127,.08)}
+         .notice{border-left:4px solid var(--accent);padding:.6rem 1rem;background:rgba(127,127,127,.08);color:var(--ink)}
+         .bad{border-color:#b42318}.pill{display:inline-block;border:1px solid var(--line);border-radius:99px;padding:.15rem .55rem;font-size:.75rem;font-weight:700}
+         footer{margin-top:3rem;border-top:1px solid var(--line);padding-top:1.25rem;font-size:.9rem}a{color:var(--accent)}
+         </style>
+         </head>
+         <body>
+         <main>
+         <h1>BytePro Enterprise Cloud Gateway</h1>
+         <p>Role-scoped vendor access. This gateway passes through only the loan objects your persona is allowed to see, queues writes through a FIFO pipeline, and never stores loan data.</p>
+         ${error ? `<p class="notice bad">${escape(error)}</p>` : ""}${role?`<h2>Provision your ${escape(role.label)} key</h2>
+         <p>This invite is locked to the <span class="pill">${escape(role.persona)}</span> persona. The key is shown once; store it in your secret manager.</p>
+         <form id="f">
+         <label>Company name<input name="tenantName" required maxlength="100" autocomplete="organization"></label>
+         <label>Developer email<input name="email" type="email" required maxlength="254" autocomplete="email"></label>
+         <button type="submit">Create API key</button>
+         </form>
+         <pre id="out">Waiting for your details.</pre>`:`<h2>Use your invite link</h2>
+         <p>Your lender shares a role-specific link such as <code>/portal?role=title&amp;code=…</code>. It opens a form that binds your new key to that role server-side; there is no admin password to collect and no persona picker to abuse.</p>
+         <p>No link yet? Ask your lender's integration contact, or read <a href="${REPO}#readme">the deployment guide</a>.</p>`}<h2>Read paths</h2><table><thead><tr><th>JSON path</th><th>Meaning</th></tr></thead><tbody>${PATHS.map(([path,meaning])=>`<tr><td><code>${escape(path)}</code></td><td>${escape(meaning)}</td></tr>`).join("")}</tbody></table><p>BytePro uses object notation,not numeric field IDs.Anything outside your persona's allowlist is removed before the response leaves the gateway; SSN, taxpayer ID, credit score, date of birth, income, assets, and liabilities are always removed.</p>
+         <h2>Endpoints</h2>
+         <table><thead><tr><th>Method</th><th>Path</th><th>Purpose</th></tr></thead><tbody>
+         ${ROUTES.map(([method, path, purpose]) => `<tr><td>${method}</td><td><code>${escape(path)}</code></td><td>${escape(purpose)}</td></tr>`).join("")}
+         </tbody></table>
+         <p>Writes return <code>202</code> with a <code>jobId</code>; poll <code>/v1/jobs/{jobId}</code>. Documents must be base64 PDFs of at most 180,000 bytes because they travel through the queue.</p>
+         <h2>Community maintained</h2>
+         <p>This is an independent, community-supported template, not a BytePro product. Every deployment is also a test: please <a href="${REPO}/issues/new/choose">open an issue</a> with sanitized evidence, or <a href="${REPO}/pulls">send a pull request</a> with a regression test. Never include API keys, invite codes, loan data, or borrower PII.</p>
+         <footer><a href="${REPO}">Source</a> · <a href="${REPO}/blob/main/README.md">Docs</a> · <a href="${REPO}/blob/main/llms.txt">llms.txt</a> · <a href="${REPO}/blob/main/CONTRIBUTING.md">Contributing</a></footer>
+         </main>
+         <script>
+         var ROLE = ${JSON.stringify(role?.role || "")};
+         var CODE = ${JSON.stringify(code || "")};
+         var form = document.getElementById("f");
+         if (form) form.addEventListener("submit", async function (event) {
+           event.preventDefault();
+           var out = document.getElementById("out");
+           var target = { role: ROLE, code: CODE, tenantName: event.target.tenantName.value, email: event.target.email.value };
+           out.textContent = "Provisioning…";
+           try {
+             var response = await fetch("/portal", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(target) });
+             var body = await response.json().catch(function () { return {}; });
+             out.textContent = response.ok
+               ? "API key (shown once):\\n" + body.apiKey + "\\n\\nGateway base URL: " + location.origin + "\\nPersona: " + body.persona
+               : body.error || "Provisioning failed (" + response.status + ")";
+             if (response.ok) form.reset();
+           } catch (error) {
+             out.textContent = "Provisioning failed: " + error.message;
+           }
+         });
+         </script>
+         </body>
+         </html>`;
+         
+         module.exports = { renderPortal };
+         
+           },
+           "writes.js": (module, exports, require) => {
+         /** Shared write-delivery logic used by the SQS worker and the local drain runner. */
+         const { log } = require("./log");
+         
+         const RETRYABLE = (status) => status === 423 || status === 429 || status >= 500;
+         
+         /** Marks a job FAILED permanently. */
+         const fail = (store, job, attempts, error, now) =>
+           store.putJob({ ...job, status: "FAILED", attempts, error, updatedAt: new Date(now()).toISOString() });
+         
+         /**
+          * Attempts one queued write (loan field update or a document upload). Returns
+          * normally when the job reached a terminal state; throws for a retryable
+          * failure so SQS (or the local runner) redelivers it.
+          */
+         async function processWrite({ job, kind, payload, byte, store, attempts, maxAttempts = 5, now = Date.now }) {
+           if (!job) return log("WARN", "JOB_NOT_FOUND", { attempts });
+           if (job.status === "COMPLETED") return;
+         
+           const updatedAt = () => new Date(now()).toISOString();
+           const upstreamKind = kind || job.kind;
+           let response;
+           try {
+             response =
+               upstreamKind === "documents"
+                 ? await byte.uploadDocument(job.role, job.loanId, payload)
+                 : await byte.updateLoan(job.role, job.loanId, payload);
+           } catch (err) {
+             log("WARN", "WRITE_TRANSPORT_ERROR", { jobId: job.jobId, loanId: job.loanId, attempts, message: err.message });
+             if (attempts >= maxAttempts) {
+               await fail(store, job, attempts, err.message, now);
+               return log("ERROR", "WRITE_ATTEMPTS_EXHAUSTED", { jobId: job.jobId, attempts });
+             }
+             await store.putJob({ ...job, status: "RETRYING", attempts, error: err.message, updatedAt: updatedAt() });
+             throw err;
+           }
+         
+           if (response.status < 300) {
+             await store.putJob({ ...job, status: "COMPLETED", attempts, error: null, updatedAt: updatedAt() });
+             return log("INFO", "WRITE_COMPLETED", { jobId: job.jobId, loanId: job.loanId, kind: upstreamKind, attempts });
+           }
+         
+           if (!RETRYABLE(response.status)) {
+             await fail(store, job, attempts, `upstream ${response.status}`, now);
+             return log("ERROR", "WRITE_REJECTED", { jobId: job.jobId, loanId: job.loanId, status: response.status, attempts });
+           }
+         
+           if (attempts >= maxAttempts) {
+             await fail(store, job, attempts, `upstream still ${response.status} after ${maxAttempts} attempts`, now);
+             return log("ERROR", "WRITE_ATTEMPTS_EXHAUSTED", { jobId: job.jobId, loanId: job.loanId, status: response.status, attempts });
+           }
+         
+           await store.putJob({ ...job, status: "RETRYING", attempts, error: `upstream ${response.status}`, updatedAt: updatedAt() });
+           log("WARN", "RECORD_LOCK_BACKOFF", { jobId: job.jobId, loanId: job.loanId, status: response.status, attempts });
+           throw new Error(`Retryable upstream status ${response.status}`);
+         }
+         
+         module.exports = { processWrite };
+         
+           },
+           "aws-store.js": (module, exports, require) => {
+         /** AWS adapters: DynamoDB tenants/sessions/jobs, SQS FIFO writes, Secrets Manager, API Gateway keys. */
+         const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
+         const { DynamoDBDocumentClient, GetCommand, PutCommand } = require("@aws-sdk/lib-dynamodb");
+         const { SecretsManagerClient, GetSecretValueCommand } = require("@aws-sdk/client-secrets-manager");
+         const { SQSClient, SendMessageCommand } = require("@aws-sdk/client-sqs");
+         const { APIGatewayClient, CreateApiKeyCommand, AddKeyToUsagePlanCommand } = require("@aws-sdk/client-api-gateway");
+         const { randomBytes } = require("node:crypto");
+         
+         const SECRET_TTL_MS = 5 * 60_000;
+         
+         function createAwsStore(env = process.env) {
+           const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
+           const sqs = new SQSClient({});
+           const secrets = new SecretsManagerClient({});
+           const apigw = new APIGatewayClient({});
+         
+           const secretsCache = new Map();
+           const getItem = async (table, key) => (await ddb.send(new GetCommand({ TableName: table, Key: key })))?.Item ?? null;
+           const putItem = (table, item) => ddb.send(new PutCommand({ TableName: table, Item: item }));
+           const iso = () => new Date().toISOString();
+         
+           return {
+             getSecret: async (id) => {
+               const cached = secretsCache.get(id);
+               if (cached && cached.expiresAt > Date.now()) return cached.value;
+               const result = await secrets.send(new GetSecretValueCommand({ SecretId: id }));
+               const value = result.SecretString ?? null;
+               secretsCache.set(id, { value, expiresAt: Date.now() + SECRET_TTL_MS });
+               return value;
+             },
+         
+             getTenant: (apiKeyId) => getItem(env.TENANT_TABLE, { apiKeyId }),
+             putTenant: (tenant) => putItem(env.TENANT_TABLE, tenant),
+         
+             getJob: (jobId) => getItem(env.JOB_TABLE, { jobId }),
+             putJob: (job) => putItem(env.JOB_TABLE, job),
+         
+             getSession: (role) => getItem(env.SESSION_TABLE, { role }),
+             putSession: async (session) => {
+               await putItem(env.SESSION_TABLE, { ...session, updatedAt: iso() });
+               return session;
+             },
+         
+             enqueueWrite: async ({ jobId, loanId, kind, payload }) => {
+               await sqs.send(
+                 new SendMessageCommand({
+                   QueueUrl: env.WRITE_QUEUE_URL,
+                   MessageGroupId: loanId,
+                   MessageDeduplicationId: jobId,
+                   MessageBody: JSON.stringify({ jobId, loanId, kind, payload })
+                 })
+               );
+             },
+         
+             createApiKey: async ({ tenantName }) => {
+               const key = await apigw.send(
+                 new CreateApiKeyCommand({
+                   name: `${tenantName.slice(0, 40)}-${randomBytes(4).toString("hex")}`,
+                   description: "BytePro gateway vendor key (role-scoped invite provisioning)",
+                   enabled: true
+                 })
+               );
+               await apigw.send(new AddKeyToUsagePlanCommand({ usagePlanId: env.USAGE_PLAN_ID, keyId: key.id }));
+               return { id: key.id, value: key.value };
+             }
+           };
+         }
+         
+         module.exports = { createAwsStore };
+         
+           },
+         };
+         const __cache = {};
+         function __require(id) {
+           if (__cache[id]) return __cache[id].exports;
+           if (!__defs[id]) throw new Error("Module not bundled: " + id);
+           const module = (__cache[id] = { exports: {} });
+           __defs[id](module, module.exports, (spec) =>
+             spec.startsWith(".") ? __require(spec.replace(/^\.\//, "").replace(/\.js$/, "") + ".js") : __nativeRequire(spec)
+           );
+           return module.exports;
+         }
+         module.exports = __require("lambda.js");
+         
+
+  WriteEventSource:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt WriteQueue.Arn
+      FunctionName: !Ref GatewayFunction
+      BatchSize: 10
+      Enabled: true
+      FunctionResponseTypes:
+        - ReportBatchItemFailures
+      ScalingConfig:
+        MaximumConcurrency: 5
+
+  Api:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub "${AWS::StackName}-api"
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  PortalResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref Api
+      ParentId: !GetAtt Api.RootResourceId
+      PathPart: portal
+
+  HealthResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref Api
+      ParentId: !GetAtt Api.RootResourceId
+      PathPart: health
+
+  ProxyResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref Api
+      ParentId: !GetAtt Api.RootResourceId
+      PathPart: "{proxy+}"
+
+  PortalGet:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref PortalResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-gateway/invocations"
+
+  PortalPost:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref PortalResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-gateway/invocations"
+
+  HealthGet:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref HealthResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-gateway/invocations"
+
+  ProxyAny:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref ProxyResource
+      HttpMethod: ANY
+      AuthorizationType: NONE
+      ApiKeyRequired: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-gateway/invocations"
+
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - PortalGet
+      - PortalPost
+      - HealthGet
+      - ProxyAny
+    Properties:
+      RestApiId: !Ref Api
+
+  ApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref Api
+      DeploymentId: !Ref ApiDeployment
+      StageName: prod
+
+  UsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    Properties:
+      Description: Vendor usage plan (rate limit and daily quota)
+      ApiStages:
+        - ApiId: !Ref Api
+          Stage: !Ref ApiStage
+      Throttle:
+        RateLimit: 50
+        BurstLimit: 100
+      Quota:
+        Limit: 100000
+        Period: DAY
+
+  ApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref GatewayFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*/*"
+
+Outputs:
+  GatewayUrl:
+    Description: Base URL for vendor API calls.
+    Value: !Sub "https://${Api}.execute-api.${AWS::Region}.amazonaws.com/prod"
+  AdminPortalUrl:
+    Description: Role-invite API key portal.
+    Value: !Sub "https://${Api}.execute-api.${AWS::Region}.amazonaws.com/prod/portal"
+  HealthUrl:
+    Description: Unauthenticated health check.
+    Value: !Sub "https://${Api}.execute-api.${AWS::Region}.amazonaws.com/prod/health"
+  StaticEgressIp:
+    Description: Allowlist this IP with Byte Software for the gateway integration.
+    Value: !Ref NatEip
+  WriteQueueUrl:
+    Description: FIFO queue that buffers BytePro writes.
+    Value: !Ref WriteQueue

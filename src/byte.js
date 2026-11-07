@@ -19,11 +19,11 @@ const parseJson = (text) => {
 
 const createByte = ({ store, env = process.env, timeoutMs = 8000, fetchImpl = fetch, now = () => Date.now() }) => {
   const base = () => String(env.BYTE_BASE_URL || "").replace(/\/+$/, "");
-  const send = (path, init, token) =>
+  const send = (path, init, token, timeout = timeoutMs) =>
     fetchImpl(`${base()}${path}`, {
       ...init,
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, ...init.headers },
-      signal: AbortSignal.timeout(timeoutMs)
+      signal: AbortSignal.timeout(timeout)
     });
 
   async function session(role, force = false) {
@@ -69,13 +69,13 @@ const createByte = ({ store, env = process.env, timeoutMs = 8000, fetchImpl = fe
     return token;
   }
 
-  async function call(role, path, init = {}) {
+  async function call(role, path, init = {}, timeout) {
     const token = await session(role);
-    const response = await send(path, init, token);
+    const response = await send(path, init, token, timeout);
     if (response.status !== 401) return { status: response.status, body: await response.text() };
 
     log("WARN", "SESSION_INVALIDATED_RETRYING", { role });
-    const retry = await send(path, init, await session(role, true));
+    const retry = await send(path, init, await session(role, true), timeout);
     return { status: retry.status, body: await retry.text() };
   }
 
@@ -86,8 +86,8 @@ const createByte = ({ store, env = process.env, timeoutMs = 8000, fetchImpl = fe
     listDocuments: (role, loanId) => call(role, `/loans/${encodeURIComponent(loanId)}/documents`),
     downloadDocument: (role, loanId, documentId) =>
       call(role, `/loans/${encodeURIComponent(loanId)}/documents/${encodeURIComponent(documentId)}`),
-    uploadDocument: (role, loanId, doc) =>
-      call(role, `/loans/${encodeURIComponent(loanId)}/documents`, { method: "POST", body: JSON.stringify(doc) })
+    uploadDocument: (role, loanId, doc, timeout) =>
+      call(role, `/loans/${encodeURIComponent(loanId)}/documents`, { method: "POST", body: JSON.stringify(doc) }, timeout)
   };
 };
 

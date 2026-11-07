@@ -1,5 +1,4 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: BytePro Enterprise Cloud API passthrough gateway (masking, FIFO writes, documents, conditions, invite portal, static egress IP).
 
 Parameters:
   ByteBaseUrl:
@@ -165,8 +164,7 @@ Resources:
       KeySchema:
         - AttributeName: apiKeyId
           KeyType: HASH
-      SSESpecification:
-        SSEEnabled: true
+      SSESpecification: {SSEEnabled: true}
 
   SessionsTable:
     Type: AWS::DynamoDB::Table
@@ -178,11 +176,8 @@ Resources:
       KeySchema:
         - AttributeName: role
           KeyType: HASH
-      SSESpecification:
-        SSEEnabled: true
-      TimeToLiveSpecification:
-        AttributeName: ttl
-        Enabled: true
+      SSESpecification: {SSEEnabled: true}
+      TimeToLiveSpecification: {AttributeName: ttl, Enabled: true}
 
   JobsTable:
     Type: AWS::DynamoDB::Table
@@ -194,11 +189,8 @@ Resources:
       KeySchema:
         - AttributeName: jobId
           KeyType: HASH
-      SSESpecification:
-        SSEEnabled: true
-      TimeToLiveSpecification:
-        AttributeName: ttl
-        Enabled: true
+      SSESpecification: {SSEEnabled: true}
+      TimeToLiveSpecification: {AttributeName: ttl, Enabled: true}
 
   DeadLetterQueue:
     Type: AWS::SQS::Queue
@@ -215,9 +207,7 @@ Resources:
       ContentBasedDeduplication: false
       VisibilityTimeout: 120
       MessageRetentionPeriod: 1209600
-      RedrivePolicy:
-        deadLetterTargetArn: !GetAtt DeadLetterQueue.Arn
-        maxReceiveCount: 5
+      RedrivePolicy: {deadLetterTargetArn: !GetAtt DeadLetterQueue.Arn, maxReceiveCount: 5}
 
   GatewayRole:
     Type: AWS::IAM::Role
@@ -235,20 +225,13 @@ Resources:
             Version: "2012-10-17"
             Statement:
               - Effect: Allow
-                Action:
-                  - dynamodb:GetItem
-                  - dynamodb:PutItem
+                Action: [dynamodb:GetItem, dynamodb:PutItem]
                 Resource:
                   - !GetAtt TenantsTable.Arn
                   - !GetAtt SessionsTable.Arn
                   - !GetAtt JobsTable.Arn
               - Effect: Allow
-                Action:
-                  - sqs:SendMessage
-                  - sqs:ReceiveMessage
-                  - sqs:DeleteMessage
-                  - sqs:ChangeMessageVisibility
-                  - sqs:GetQueueAttributes
+                Action: [sqs:SendMessage, sqs:ReceiveMessage, sqs:DeleteMessage, sqs:ChangeMessageVisibility, sqs:GetQueueAttributes]
                 Resource:
                   - !GetAtt WriteQueue.Arn
                   - !GetAtt DeadLetterQueue.Arn
@@ -259,25 +242,16 @@ Resources:
                   - !Ref BrokerSecret
                   - !Ref AppraisalSecret
               - Effect: Allow
-                Action:
-                  - apigateway:GET
-                  - apigateway:POST
-                  - apigateway:PUT
-                  - apigateway:PATCH
+                Action: [apigateway:GET, apigateway:POST, apigateway:PUT, apigateway:PATCH]
                 Resource:
                   - !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}::/apikeys"
                   - !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}::/usageplans/${UsagePlan}/keys"
                   - !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}::/usageplans/${UsagePlan}/keys/*"
               - Effect: Allow
-                Action:
-                  - ec2:CreateNetworkInterface
-                  - ec2:DescribeNetworkInterfaces
-                  - ec2:DeleteNetworkInterface
+                Action: [ec2:CreateNetworkInterface, ec2:DescribeNetworkInterfaces, ec2:DeleteNetworkInterface]
                 Resource: "*"
               - Effect: Allow
-                Action:
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
                 Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-gateway:*"
 
   GatewayLogGroup:
@@ -292,16 +266,13 @@ Resources:
       FunctionName: !Sub "${AWS::StackName}-gateway"
       Runtime: nodejs20.x
       Handler: index.handler
-      Architectures:
-        - arm64
+      Architectures: [arm64]
       MemorySize: 256
       Timeout: 29
       Role: !GetAtt GatewayRole.Arn
       VpcConfig:
-        SubnetIds:
-          - !Ref PrivateSubnet
-        SecurityGroupIds:
-          - !Ref LambdaSecurityGroup
+        SubnetIds: [!Ref PrivateSubnet]
+        SecurityGroupIds: [!Ref LambdaSecurityGroup]
       Environment:
         Variables:
           BYTE_BASE_URL: !Ref ByteBaseUrl
@@ -341,9 +312,7 @@ Resources:
     Type: AWS::ApiGateway::RestApi
     Properties:
       Name: !Sub "${AWS::StackName}-api"
-      EndpointConfiguration:
-        Types:
-          - REGIONAL
+      EndpointConfiguration: {Types: [REGIONAL]}
 
   PortalResource:
     Type: AWS::ApiGateway::Resource
@@ -435,7 +404,6 @@ Resources:
   UsagePlan:
     Type: AWS::ApiGateway::UsagePlan
     Properties:
-      Description: Vendor usage plan (rate limit and daily quota)
       ApiStages:
         - ApiId: !Ref Api
           Stage: !Ref ApiStage
@@ -456,17 +424,12 @@ Resources:
 
 Outputs:
   GatewayUrl:
-    Description: Base URL for vendor API calls.
     Value: !Sub "https://${Api}.execute-api.${AWS::Region}.amazonaws.com/prod"
   AdminPortalUrl:
-    Description: Role-invite API key portal.
     Value: !Sub "https://${Api}.execute-api.${AWS::Region}.amazonaws.com/prod/portal"
   HealthUrl:
-    Description: Unauthenticated health check.
     Value: !Sub "https://${Api}.execute-api.${AWS::Region}.amazonaws.com/prod/health"
   StaticEgressIp:
-    Description: Allowlist this IP with Byte Software for the gateway integration.
     Value: !Ref NatEip
   WriteQueueUrl:
-    Description: FIFO queue that buffers BytePro writes.
     Value: !Ref WriteQueue

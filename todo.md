@@ -9,12 +9,13 @@ Highest-value workflow for title and broker partners; prioritised above every ot
 
 - [x] Condition submission: `POST /v1/loans/{id}/conditions` accepted from `TPO_BROKER` and `TITLE_VENDOR`, queued through FIFO, `202` + job ID
 - [x] Conditions readable on the loan payload for `TPO_BROKER` (masked allowlist) and sent upstream as `Conditions[]`
-- [x] Loan document upload: `POST /v1/loans/{id}/documents` (base64 PDF, 180,000-byte SQS cap, `%PDF-` signature check) for broker and title keys
+- [x] Loan document upload: `POST /v1/loans/{id}/documents` (base64 PDF, ≤180,000 bytes through FIFO, 180,001–5,000,000 bytes synchronous, `%PDF-` signature check) for broker and title keys
 - [x] Loan document list: `GET /v1/loans/{id}/documents` (ID, type, file name, notes, uploaded date)
 - [x] Loan document download: `GET /v1/loans/{id}/documents/{docId}` returns `contentBase64`
-- [x] Uploads run through the same FIFO retry/DLQ pipeline as fee and condition writes; job records hold no document bytes
+- [x] Uploads up to 180,000 bytes run through the same FIFO retry/DLQ pipeline as fee and condition writes; larger uploads call BytePro directly with a 20-second timeout and create no job record
 - [—] Live BytePro document/condition shapes (blocked: no BytePro tenant; upstream routes are the documented REST convention, exercised only against `mock/bytepro.js`)
-- [—] Documents larger than 180,000 bytes (blocked: they travel inside an SQS message; an S3 staging hop would be the next architecture change)
+- [x] Documents up to 5,000,000 bytes: uploads above the SQS limit use a synchronous direct BytePro call and return `200 { status: "COMPLETED", sync: true, documentId }` (proved by `test/gateway.test.js` — “documents above the SQS limit upload synchronously…” and “a direct upload surfaces BytePro locks…”)
+- [—] Documents above 5,000,000 bytes (blocked: API Gateway's base64 request ceiling; an S3 staging hop remains the next architecture change)
 - [—] Per-document organization scoping (blocked: no BytePro field ties a document to the caller's organization; see the security note in `README.md`)
 - [—] Appraisal (AMC) document or condition access (deferred: appraisal persona is read-only by design; open an issue with a real workflow)
 
@@ -65,8 +66,8 @@ Highest-value workflow for title and broker partners; prioritised above every ot
 - [x] `scripts/build.js`: bundle `src/` → readable `dist/gateway.js`, minify the inlined copy (no dependency), 51,200-byte guard, `--check`
 - [x] `infra/template.yaml`: VPC + NAT + static EIP, DynamoDB tenants/sessions/jobs, SQS FIFO + DLQ, Secrets Manager, API Gateway usage plan, inline Lambda
 - [x] `deploy.sh` one-line CloudShell installer (prompts for BytePro URL/account/role credentials, generates invite codes, prints invite links + egress IP)
-- [x] Tests: session cache/refresh, invite provisioning, masking, reads/projection, fee/condition writes, document upload/list/download, validation failures, retry classification, job ownership, HTTP e2e, template guards, executed inline bundle, static/community guards
-- [x] `npm run verify` green in this environment (51 tests at `6259620`; CI Verify jobs green on Node 20 and 24)
+- [x] Tests: session cache/refresh, invite provisioning, masking, reads/projection, fee/condition writes, queued and synchronous large-document upload/list/download, validation failures, retry classification, job ownership, HTTP e2e, template guards, executed inline bundle, static/community guards
+- [x] `npm run verify` green in this environment (55 tests after the large-document change; pushed-commit CI result recorded in `history.md`)
 - [x] Community surfaces: `CONTRIBUTING.md`, `llms.txt`, GitHub Pages `index.html`, issue forms, PR template
 - [x] Community direction codified in `agents.md` §0 and repeated on every developer-facing surface
 - [x] GitHub Pages enabled on `main` / root; live page (200, canonical + JSON-LD), `llms.txt` (200), `robots.txt` (200), and `sitemap.xml` (200) fetched 2026-11-07

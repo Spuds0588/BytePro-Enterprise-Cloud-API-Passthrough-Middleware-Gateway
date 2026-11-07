@@ -4,6 +4,43 @@ Append-only. Newest entries at the top. Never rewrite past entries; add a correc
 
 ---
 
+## 2026-11-07 — Documents above the SQS cap upload directly to BytePro
+
+**Why.** `todo.md`'s highest-priority open code item was documents larger than 180,000 bytes: SQS caps a
+message at 256 KB, so a base64 PDF beyond that could never be queued. The dev doc and sister projects
+either rejected those files or introduced an S3 staging bucket. An S3 hop adds a bucket, lifecycle rules,
+and temporary document storage, which contradicts the stateless-passthrough rule in `agents.md` §2.
+
+**Decision.** Keep small PDFs (≤180,000 decoded bytes) on the existing FIFO path, and send anything larger
+directly to BytePro in the request, up to 5,000,000 bytes. No new AWS resource, no document at rest, no
+new dependency. Direct uploads get a 20-second upstream timeout instead of the 8-second read timeout and
+return `200 { status: "COMPLETED", sync: true, documentId }`; queued uploads still return `202` + job ID.
+A direct upload has no FIFO ordering or automatic lock retry, so an upstream `423` is returned to the caller
+to retry. Files above 5 MB are rejected with `413` and remain a deliberate S3-architecture item.
+
+**Implementation.** `src/app.js` now parses against the 5 MB direct cap, branches on the 180,000-byte
+queue threshold, maps upstream status through the existing `upstreamError`, and logs byte counts and the
+loan ID only. `src/byte.js` accepts an optional per-call timeout so the upload can exceed the default
+8 seconds. `mock/bytepro.js` needed no change because it already accepts arbitrary base64 PDFs and
+enforces the locked-loan `423`. Tests cover the direct success path (200, no queue message or job, exact
+base64 at the fake), the lock response, the 5 MB rejection, and a direct timeout (`504`).
+
+**Docs reconciled.** README features/API/architecture/storage/limits, `llms.txt`, `index.html` (JSON-LD,
+card, API table, limits, FAQ), the portal copy, `agents.md` §2/§4, and `CONTRIBUTING.md` deployment steps
+now describe both paths. The CloudFormation YAML was compacted (flow-style IAM/SQS/DynamoDB/API Gateway
+lists, removed Output descriptions and the top-level Description) to absorb the additional handler code.
+
+**Local verification.** `npm run verify` → **55 tests, 55 pass, 0 fail**. Template: **49,979 bytes,
+1,221 bytes under the 50,176-byte guard ceiling**. Live local run with `PORT=3999 node dev/server.js`:
+a 200,005-byte PDF returned `200 COMPLETED`, `sync: true`, a document ID, no job ID, and the document list
+showed one entry. The server was stopped with its recorded PID.
+
+**Not verified.** No live BytePro tenant or AWS deployment exists here, so the real document-upload
+response shape and API Gateway's actual base64 request ceiling remain unconfirmed. A 5 MB body encodes to
+roughly 6.7 MB; if a deployed gateway rejects it below 5 MB, lower the constant and record the real limit.
+
+---
+
 ## 2026-11-07 — Published to main; Pages live; CI green on Node 20 and Node 24
 
 **Pushed.** MVP committed at `420d252` (41 files, 4,822 insertions) and pushed to `origin/main`.

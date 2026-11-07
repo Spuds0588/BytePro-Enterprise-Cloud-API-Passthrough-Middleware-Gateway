@@ -19,7 +19,7 @@ const ROUTES = [
   ["GET", "/v1/loans/{loanId}?paths=Property,Loan,Milestones", "Masked loan object"],
   ["PATCH", "/v1/loans/{loanId}/fees", "Queue a fee update"],
   ["POST", "/v1/loans/{loanId}/conditions", "Submit condition responses"],
-  ["POST", "/v1/loans/{loanId}/documents", "Queue a base64 PDF upload"],
+  ["POST", "/v1/loans/{loanId}/documents", "Upload a base64 PDF"],
   ["GET", "/v1/loans/{loanId}/documents", "List loan documents"],
   ["GET", "/v1/loans/{loanId}/documents/{documentId}", "Download one PDF"],
   ["GET", "/v1/jobs/{jobId}", "Write job status"]
@@ -76,7 +76,7 @@ ${PATHS.map(([path, meaning]) => `<tr><td><code>${escape(path)}</code></td><td>$
 <table><thead><tr><th>Method</th><th>Path</th><th>Purpose</th></tr></thead><tbody>
 ${ROUTES.map(([method, path, purpose]) => `<tr><td>${method}</td><td><code>${escape(path)}</code></td><td>${escape(purpose)}</td></tr>`).join("")}
 </tbody></table>
-<p>Writes return <code>202</code> with a <code>jobId</code>; poll <code>/v1/jobs/{jobId}</code>. Documents must be base64 PDFs of at most 180,000 bytes because they travel through the queue.</p>
+<p>Writes return <code>202</code> with a <code>jobId</code>; poll <code>/v1/jobs/{jobId}</code>. PDFs up to 180,000 bytes are queued; larger PDFs (max 5 MB) upload synchronously and return <code>200</code>.</p>
 <h2>Community maintained</h2>
 <p>This is an independent, community-supported template, not a BytePro product. Every deployment is also a test: please <a href="${REPO}/issues/new/choose">open an issue</a> with sanitized evidence, or <a href="${REPO}/pulls">send a pull request</a> with a regression test. Never include API keys, invite codes, loan data, or borrower PII.</p>
 <footer><a href="${REPO}">Source</a> · <a href="${REPO}/blob/main/README.md">Docs</a> · <a href="${REPO}/blob/main/llms.txt">llms.txt</a> · <a href="${REPO}/blob/main/CONTRIBUTING.md">Contributing</a></footer>

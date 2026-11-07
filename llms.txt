@@ -17,10 +17,11 @@ Agent manual: https://github.com/Spuds0588/BytePro-Enterprise-Cloud-API-Passthro
 
 - Reads a loan as BytePro object notation, masked by a deny-by-default persona allowlist. No field-ID
   dictionary and no MISMO translation.
-- Queues fee and condition updates and document uploads through SQS FIFO, grouped by loan, with lock
-  retries and a dead-letter queue. Writes return 202 plus a job ID.
-- Documents and conditions are Priority 1: broker and title keys can upload a base64 PDF (max
-  180,000 bytes), list documents, download one by ID, and submit condition responses.
+- Queues fee and condition updates and small document uploads through SQS FIFO, grouped by loan, with
+  lock retries and a dead-letter queue. Queued writes return 202 plus a job ID.
+- Documents and conditions are Priority 1: broker and title keys can upload a base64 PDF (≤180,000
+  bytes through the FIFO queue, up to 5 MB synchronously), list documents, download one by ID, and
+  submit condition responses.
 - Provisions vendor keys from role-scoped invite links; the persona is chosen server-side.
 - Deploys from one CloudFormation file with the Lambda bundle inlined, behind a NAT gateway with a
   static Elastic IP for BytePro's firewall allowlist.
@@ -84,5 +85,5 @@ Not verified: any live BytePro call, any live AWS deployment, the real upstream 
 response shapes, and the NAT egress allowlist. Upstream document routes are the documented REST
 convention exercised only against `mock/bytepro.js`.
 
-Known limits: 180,000-byte uploads (SQS message limit), no per-loan organization scoping, invite codes
-are global per role, no webhooks, no read cache, no full 1003 write, no CORS.
+Known limits: 5 MB upload cap, no FIFO retry for uploads above 180,000 bytes, no per-loan organization
+scoping, invite codes are global per role, no webhooks, no read cache, no full 1003 write, no CORS.

@@ -8,7 +8,9 @@ const { renderPortal } = require("./portal");
 
 const MAX_ITEMS = 100;
 const DEFAULT_PATHS = "Property,Loan,Borrower,Milestones,Conditions,Fees,CustomFields";
-const MAX_DOCUMENT_BYTES = 180_000;
+const MAX_QUEUED_DOCUMENT_BYTES = 180_000;
+const MAX_DIRECT_DOCUMENT_BYTES = 5_000_000;
+const DIRECT_DOCUMENT_TIMEOUT_MS = 20_000;
 const JOB_TTL_SECONDS = 30 * 24 * 60 * 60;
 const ROOT = /^[A-Za-z][A-Za-z0-9]{0,40}$/;
 const MAX_ROOTS = 10;
@@ -81,14 +83,14 @@ const validConditions = (conditions) =>
       (condition.borrowerVisible === undefined || typeof condition.borrowerVisible === "boolean")
   );
 
-const parsePdf = (content) => {
+const parsePdf = (content, maxBytes = MAX_QUEUED_DOCUMENT_BYTES) => {
   if (typeof content !== "string" || !content.trim()) return { error: [400, "contentBase64 is required"] };
   const clean = content.replace(/\s+/g, "");
   if (clean.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(clean)) return { error: [400, "contentBase64 must be valid base64"] };
   const bytes = Buffer.from(clean, "base64");
   if (!bytes.subarray(0, 5).equals(Buffer.from("%PDF-"))) return { error: [415, "Only PDF content is supported"] };
-  if (bytes.length > MAX_DOCUMENT_BYTES) {
-    return { error: [413, `Document exceeds ${MAX_DOCUMENT_BYTES} bytes (SQS message limit)`, { maxBytes: MAX_DOCUMENT_BYTES }] };
+  if (bytes.length > maxBytes) {
+    return { error: [413, `Document exceeds ${maxBytes} bytes`, { maxBytes }] };
   }
   return { content: clean, bytes: bytes.length };
 };
@@ -101,6 +103,15 @@ const upstreamError = (status, loanId) => {
   if (status >= 500) return error(502, "BytePro unavailable");
   if (status >= 300) return error(400, "BytePro rejected the request", { upstreamStatus: status, loanId });
   return null;
+};
+
+const uploadedDocumentId = (body) => {
+  try {
+    const parsed = JSON.parse(body);
+    return parsed?.documentId ?? parsed?.id ?? null;
+  } catch {
+    return null;
+  }
 };
 
 function createApp({ store, byte, env = process.env, now = () => Date.now() }) {
@@ -153,9 +164,24 @@ function createApp({ store, byte, env = process.env, now = () => Date.now() }) {
       if (body.notes !== undefined && (typeof body.notes !== "string" || body.notes.length > 500)) {
         return error(400, "notes must be a string (max 500 chars)");
       }
-      const pdf = parsePdf(body?.contentBase64);
+      const pdf = parsePdf(body?.contentBase64, MAX_DIRECT_DOCUMENT_BYTES);
       if (pdf.error) return error(pdf.error[0], pdf.error[1], pdf.error[2]);
-      payload = { documentType: body.documentType.trim(), notes: String(body.notes || "").trim(), contentBase64: pdf.content };
+      const documentType = body.documentType.trim();
+      const notes = String(body.notes || "").trim();
+      if (pdf.bytes > MAX_QUEUED_DOCUMENT_BYTES) {
+        let upstream;
+        try {
+          upstream = await byte.uploadDocument(tenant.role, loanId, { documentType, notes, contentBase64: pdf.content }, DIRECT_DOCUMENT_TIMEOUT_MS);
+        } catch (err) {
+          log("ERROR", "BYTEPRO_DOCUMENT_UPLOAD_FAILED", { loanId, bytes: pdf.bytes, message: err.message });
+          return error(err.name === "TimeoutError" ? 504 : 502, "BytePro document upload failed");
+        }
+        const failed = upstreamError(upstream.status, loanId);
+        if (failed) return failed;
+        log("INFO", "DOCUMENT_DIRECT_COMPLETE", { loanId, tenantName: tenant.tenantName, bytes: pdf.bytes });
+        return json(200, { status: "COMPLETED", loanId, sync: true, documentId: uploadedDocumentId(upstream.body) });
+      }
+      payload = { documentType, notes, contentBase64: pdf.content };
     } else if (kind === "conditions") {
       if (!validConditions(body?.conditions)) return error(400, "Body must contain a non-empty conditions array (max 100)");
       payload = {
@@ -353,4 +379,4 @@ function createApp({ store, byte, env = process.env, now = () => Date.now() }) {
   return { handle };
 }
 
-module.exports = { createApp, parsePdf, MAX_DOCUMENT_BYTES };
+module.exports = { createApp };

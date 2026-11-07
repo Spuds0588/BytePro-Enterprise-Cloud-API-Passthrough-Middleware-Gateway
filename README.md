@@ -33,9 +33,10 @@ borrower PII in an issue, PR, screenshot, or log.
 
 ## Features
 
-- **Loan document exchange (Priority 1)** — a broker or title key uploads a base64 PDF through the FIFO
-  pipeline, lists a loan's documents, and downloads one by ID. Uploads are capped at 180,000 bytes so the
-  document fits in an SQS message; nothing is stored by the gateway.
+- **Loan document exchange (Priority 1)** — a broker or title key uploads a base64 PDF, lists a loan's
+  documents, and downloads one by ID. PDFs up to 180,000 bytes are queued through the FIFO pipeline;
+  PDFs from 180,001 bytes to 5 MB upload synchronously in the request (`200` instead of `202`) because
+  they cannot fit in an SQS message. Nothing is stored by the gateway.
 - **Condition responses (Priority 1)** — `POST /v1/loans/{id}/conditions` accepts description/status rows
   from broker and title keys, applies them through the same retry pipeline, and returns `202` + a job ID.
   Brokers can read conditions on the loan payload.
@@ -45,9 +46,9 @@ borrower PII in an issue, PR, screenshot, or log.
   legal description, and basic loan terms.
 - **Stateful session handling** — one BytePro service account per role, `POST /session`, bearer token
   cached per role in DynamoDB for at most 25 minutes, invalidated and retried once on a `401`.
-- **Async writes** — fee and condition updates and document uploads are queued by loan
+- **Async writes** — fee and condition updates and queued document uploads are grouped by loan
   (`MessageGroupId = loanId`), return `202`, retry BytePro record locks with backoff, and dead-letter
-  after five attempts.
+  after five attempts. A PDF above 180,000 bytes uploads synchronously instead.
 - **Role-scoped onboarding** — the lender shares a title, broker, or appraisal invite link; the vendor
   enters a company name and developer email; the gateway binds the key to that persona server-side.
   No admin token and no per-vendor admin work.
@@ -103,7 +104,7 @@ curl -s "$GATEWAY_URL/v1/loans/BYTE-1002948/documents" -H "x-api-key: $KEY"
 | `POST` | `/portal` body `{ role, code, tenantName, email }` | invite code | `{ apiKey, tenantName, email, role, persona }` |
 | `GET` | `/v1/loans/{id}?paths=Property,Loan,Milestones` | `x-api-key` | `{ loanId, data, _cached: false }`, masked |
 | `POST` | `/v1/loans/{id}/conditions` body `{ "conditions": [{ "description": "…", "status": "Satisfied" }] }` | `x-api-key` | `202 { status, jobId, loanId, statusUrl }` (broker/title) |
-| `POST` | `/v1/loans/{id}/documents` body `{ "documentType": "…", "notes": "…", "contentBase64": "<PDF>" }` | `x-api-key` | `202 { status, jobId, loanId, statusUrl }` (broker/title) |
+| `POST` | `/v1/loans/{id}/documents` body `{ "documentType": "…", "notes": "…", "contentBase64": "<PDF>" }` | `x-api-key` | `202 { status, jobId, loanId, statusUrl }` (≤180 KB) or `200 { status: "COMPLETED", sync: true, documentId }` (broker/title) |
 | `GET` | `/v1/loans/{id}/documents` | `x-api-key` | `{ loanId, documents: [{ id, documentType, fileName, notes, uploadedAt }] }` (broker/title) |
 | `GET` | `/v1/loans/{id}/documents/{docId}` | `x-api-key` | `{ documentId, contentType: "application/pdf", contentBase64 }` (broker/title) |
 | `PATCH` | `/v1/loans/{id}/fees` body `{ "fees": [{ "feeType": "…", "amount": 1350 }] }` | `x-api-key` | `202 { status, jobId, loanId, statusUrl }` (broker/title) |
@@ -111,9 +112,10 @@ curl -s "$GATEWAY_URL/v1/loans/BYTE-1002948/documents" -H "x-api-key: $KEY"
 | `GET` | `/v1/jobs/{id}` | `x-api-key` | `{ jobId, loanId, kind, status, attempts, createdAt, updatedAt, error }` |
 
 Job statuses: `PENDING` → `RETRYING` → `COMPLETED` / `FAILED`. Fee and condition arrays are capped at
-100 items. Uploads must be base64-encoded PDFs with a valid `%PDF-` signature and at most 180,000
-decoded bytes (the SQS message limit); violations return `400`, `413`, or `415` before any job is
-created. Documents are never written to DynamoDB; only the queue message carries the bytes.
+100 items. Uploads must be base64-encoded PDFs with a valid `%PDF-` signature. Files up to 180,000
+decoded bytes are queued; larger files up to 5,000,000 bytes upload synchronously with a 20-second
+upstream timeout and return `200` with `sync: true`. Violations return `400`, `413`, or `415`.
+Documents are never written to DynamoDB or S3; only a queued upload's bytes travel in the SQS message.
 
 ### Roles and personas
 
@@ -141,7 +143,8 @@ Vendor ──x-api-key────► API Gateway (usage plan)
                          ├── GET  /v1/loans/{id}             → masked BytePro JSON read
                          ├── PATCH /v1/loans/{id}/fees        → SQS FIFO → BytePro PATCH → 202
                          ├── POST /v1/loans/{id}/conditions   → SQS FIFO → BytePro PATCH → 202
-                         ├── POST /v1/loans/{id}/documents    → SQS FIFO → BytePro document upload → 202
+                         ├── POST /v1/loans/{id}/documents    → ≤180 KB: SQS FIFO → BytePro → 202
+                         │                                      >180 KB: direct BytePro upload → 200
                          ├── GET  /v1/loans/{id}/documents[/{docId}] → BytePro list/download
                          └── GET  /v1/jobs/{id}               → job status (owner only)
                                                         │
@@ -151,8 +154,8 @@ Vendor ──x-api-key────► API Gateway (usage plan)
 ```
 
 Storage: DynamoDB tenants, per-role sessions (TTL), and jobs (TTL) · Secrets Manager (one raw password
-per role) · API Gateway key store. No loan documents are persisted; only the in-flight write payload
-(a changed-fields object or a base64 PDF) travels in the SQS message and is deleted with it.
+per role) · API Gateway key store. No loan documents are persisted; a queued upload's bytes travel in
+the SQS message and are deleted with it, while a large upload goes straight to BytePro.
 
 ## Local development
 
@@ -212,8 +215,10 @@ Other known limits:
   `POST/GET /loans/{id}/documents` and `PATCH /loans/{id}` with `{ data: { Conditions: [...] } }`, the
   documented REST convention. Only `mock/bytepro.js` has confirmed those shapes. If your tenant
   disagrees, open an issue with a sanitized payload — do not force it in a private fork.
-- **180,000-byte upload cap** because the PDF travels inside the SQS message. Larger files need an S3
-  staging hop, which is a deliberate future architecture change, not a parameter.
+- **5,000,000-byte upload cap** (API Gateway request limit with base64 overhead). Files up to 180,000
+  bytes are queued with FIFO retries; larger files upload synchronously, so they have no FIFO ordering
+  or automatic lock retry — a `423` means retry the request. Files above 5 MB still need an S3 staging
+  hop, which remains a deliberate future architecture change.
 - **No per-loan organization scoping.** A tenant mapping fixes the persona, not which loans a key may
   touch: reads and writes accept any loan ID the shared BytePro service accounts can reach. Deploy only
   where that visibility is acceptable, or add a loan-to-organization check before exposing the gateway

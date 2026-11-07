@@ -286,7 +286,7 @@ test("document validation rejects bad base64, non-PDFs, oversized files, and mis
     [{ ...base, documentType: "" }, 400],
     [{ ...base, contentBase64: "not base64!" }, 400],
     [{ ...base, contentBase64: Buffer.from("just text").toString("base64") }, 415],
-    [{ ...base, contentBase64: Buffer.concat([Buffer.from("%PDF-"), Buffer.alloc(180_001)]).toString("base64") }, 413],
+    [{ ...base, contentBase64: Buffer.concat([Buffer.from("%PDF-"), Buffer.alloc(5_000_001)]).toString("base64") }, 413],
     [{ ...base, notes: "x".repeat(501) }, 400]
   ];
   for (const [body, expected] of cases) {
@@ -342,6 +342,65 @@ test("retryable upstream failures keep the job RETRYING; permanent and exhausted
   const final = await exhausted.getJob(exhaustedJob.jobId);
   assert.equal(final.status, "FAILED");
   assert.match(final.error, /after 5 attempts/);
+});
+
+test("documents above the SQS limit upload synchronously with no job or queue message", async (t) => {
+  const { app, store, mock } = await openStack(t);
+  const broker = await provision(app, store, "broker", "Acme Broker");
+  const contentBase64 = Buffer.concat([Buffer.from("%PDF-"), Buffer.alloc(300_000)]).toString("base64");
+
+  const uploaded = await call(app, "POST", "/v1/loans/BYTE-1002948/documents", broker.apiKeyId, {
+    documentType: "Appraisal Report",
+    notes: "large report",
+    contentBase64
+  });
+  assert.equal(uploaded.statusCode, 200, uploaded.body);
+  const body = JSON.parse(uploaded.body);
+  assert.equal(body.status, "COMPLETED");
+  assert.equal(body.sync, true);
+  assert.ok(body.documentId);
+  assert.equal(store.queue.length, 0, "large uploads bypass the queue");
+  assert.equal(mock.counters.uploads, 1);
+  assert.equal([...mock.documents.values()][0][0].contentBase64, contentBase64, "BytePro must receive the full PDF");
+});
+
+test("a direct upload surfaces BytePro locks and enforces the 5 MB cap", async (t) => {
+  const { app, store } = await openStack(t);
+  const broker = await provision(app, store, "broker", "Acme Broker");
+  const largePdf = (bytes) => Buffer.concat([Buffer.from("%PDF-"), Buffer.alloc(bytes)]).toString("base64");
+
+  const locked = await call(app, "POST", "/v1/loans/BYTE-LOCKED-1/documents", broker.apiKeyId, {
+    documentType: "Title Commitment",
+    contentBase64: largePdf(200_000)
+  });
+  assert.equal(locked.statusCode, 423);
+  assert.equal(JSON.parse(locked.body).code, "FILE_LOCKED");
+
+  const oversized = await call(app, "POST", "/v1/loans/BYTE-1002948/documents", broker.apiKeyId, {
+    documentType: "Title Commitment",
+    contentBase64: largePdf(5_000_001)
+  });
+  assert.equal(oversized.statusCode, 413);
+  assert.equal(JSON.parse(oversized.body).maxBytes, 5_000_000);
+  assert.equal(store.queue.length, 0);
+});
+
+test("a direct upload timeout becomes 504 without creating a job", async (t) => {
+  const store = createMemoryStore();
+  const { createApp } = require("../src/app");
+  const { localEnv } = require("../dev/config");
+  const app = createApp({
+    store,
+    byte: { uploadDocument: async () => Promise.reject(Object.assign(new Error("timed out"), { name: "TimeoutError" })) },
+    env: localEnv()
+  });
+  const key = await provision(app, store, "broker", "Acme Broker");
+  const response = await call(app, "POST", "/v1/loans/BYTE-1002948/documents", key.apiKeyId, {
+    documentType: "Appraisal Report",
+    contentBase64: Buffer.concat([Buffer.from("%PDF-"), Buffer.alloc(200_000)]).toString("base64")
+  });
+  assert.equal(response.statusCode, 504);
+  assert.equal(store.queue.length, 0);
 });
 
 test("HTTP adapter serves the whole flow with x-api-key identity", async (t) => {

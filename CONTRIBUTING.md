@@ -60,8 +60,8 @@ If you have a BytePro tenant and an AWS account:
 
 1. Deploy with `deploy.sh` or upload `template.yaml` in CloudFormation.
 2. Allowlist the stack's `StaticEgressIp` with Byte Software before blaming the gateway for timeouts.
-3. Verify a complete flow: portal invite → key → masked read → condition write → job poll → document
-   upload → list → download.
+3. Verify a complete flow: portal invite → key → masked read → condition write → job poll → queued
+   document upload → list → download, plus one PDF above 180,000 bytes to exercise the synchronous path.
 4. Report what the real BytePro payloads look like (sanitized), especially if they differ from
    `mock/bytepro.js`.
 5. Rotate the invite codes and BytePro passwords if they were ever exposed.

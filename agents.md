@@ -53,8 +53,8 @@ use?* If not, why not.
 This gateway is a **stateless passthrough**. It must never become a system of record.
 
 - Do **not** store loan data, borrower data, or documents at rest. Only tenant mappings, session
-  tokens, job status, and in-flight write payloads (a changed-fields object or a base64 PDF in the SQS
-  message body) exist.
+  tokens, job status, and in-flight write payloads exist. A queued upload's base64 PDF lives in its
+  SQS message; an upload above 180,000 bytes goes straight to BytePro in the request and is never stored.
 - Do **not** invent field definitions or a translation dictionary. BytePro's contract is object
   notation (`Property.Street`, `Loan.BaseLoanAmount`), so the gateway masks paths, it does not rename
   fields.
@@ -99,7 +99,8 @@ and tests.
 - Writes are delivered by `src/writes.js`: retryable (`423`/`429`/`5xx`/transport) failures surface to
   SQS for redelivery; permanent rejections mark the job `FAILED`.
 - Documents and conditions are first-class: a broker or title key uploads/reads loan documents and
-  submits condition responses. The appraisal persona cannot touch either.
+  submits condition responses. Uploads up to 180,000 bytes are queued; larger PDFs (max 5 MB) upload
+  synchronously because they cannot fit in SQS. The appraisal persona cannot touch either.
 
 ## 5. Repo Map
 

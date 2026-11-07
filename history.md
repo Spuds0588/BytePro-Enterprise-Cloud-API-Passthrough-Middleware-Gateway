@@ -4,6 +4,33 @@ Append-only. Newest entries at the top. Never rewrite past entries; add a correc
 
 ---
 
+## 2026-11-07 — Todo audit: no locally achievable feature left; verify command fixed
+
+**Audit.** Every remaining unchecked line in `todo.md` is `[—]`, not `[ ]`: live BytePro document/condition
+shapes, per-document organization scoping, and full 1003 writes need a real tenant or sanitized payloads;
+>5 MB uploads and a live deployment need AWS; appraisal document/condition access and single-use invites
+are product decisions already deferred; GitHub Discussions and contributor invitations are repository
+settings; the on-prem `ByteRelay.exe` edition is a separate architecture. No feature was invented to fill
+the gap, and no deferred product decision was reversed.
+
+**Defect found by reading the developer path.** `npm test` and CI run `node --test test/*.test.js`, but
+`npm run verify` still ran `node --test test/`. Node 24 treats that directory as a module and fails
+(`MODULE_NOT_FOUND`), so the command every developer surface tells contributors to run was broken on the
+CI matrix's newer runtime. The directory form also discovered `test/helpers.js` as a test, inflating the
+reported count by one. This is a tooling contradiction, not substitute feature scope.
+
+**Fix.** `package.json` now makes `verify` use the same glob as `npm test` and CI. A regression test reads
+`package.json` and asserts both scripts keep the Node 24-compatible glob, so the old form cannot silently
+come back. The corrected suite is **55 tests** (54 behavior tests plus the new guard), not the previously
+reported 55-plus-helper.
+
+**Verification.** `npm run verify` → **55 tests, 55 pass, 0 fail** on Node 20.19.2. Template remains
+**49,979 bytes with 1,221 bytes of headroom**; no template or runtime behavior changed. Node 24 is proven
+by CI, not by a local Node 24 binary. No AWS stack or BytePro tenant was available, so live behavior stays
+unverified.
+
+---
+
 ## 2026-11-07 — Large-document path shipped; CI and Pages verified on the pushed commit
 
 **Pushed.** The direct-upload implementation, tests, and reconciled docs are in `1f79462` on `main`.

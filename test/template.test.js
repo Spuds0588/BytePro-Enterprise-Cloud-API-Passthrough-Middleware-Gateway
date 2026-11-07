@@ -111,3 +111,9 @@ test("CI verifies tests and template sync on Node 20 and 24", () => {
   assert.match(ci, /npm test/);
   assert.match(ci, /scripts\/build\.js --check/);
 });
+
+test("npm run verify uses the same Node 24-compatible test glob as npm test", () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+  assert.match(pkg.scripts.test, /node --test test\/\*\.test\.js$/);
+  assert.match(pkg.scripts.verify, /node --test test\/\*\.test\.js$/);
+});

@@ -4,6 +4,27 @@ Append-only. Newest entries at the top. Never rewrite past entries; add a correc
 
 ---
 
+## 2026-11-07 — Large-document path shipped; CI and Pages verified on the pushed commit
+
+**Pushed.** The direct-upload implementation, tests, and reconciled docs are in `1f79462` on `main`.
+**CI.** Workflow run `42329864415` completed successfully: **Verify (Node 20) success, Verify (Node 24)
+success**, and the `build` job success.
+
+**GitHub Pages.** Deployment run `42329863833` completed successfully. Live fetches from the canonical
+Pages URL (cache-busted by commit) returned:
+
+| Surface | Result |
+| --- | --- |
+| `index.html` | `200`, 15,373 bytes; includes “5 MB” and the synchronous-upload copy |
+| `llms.txt` | `200`, 5,451 bytes; includes the 180,000-byte queue / 5 MB synchronous wording |
+| `robots.txt` | `200`, 133 bytes |
+| `sitemap.xml` | `200`, 330 bytes |
+
+**Cleanup.** The generated `dist/` directory was removed after the build check; no server process from the
+smoke test remains, and no dependency was installed.
+
+---
+
 ## 2026-11-07 — Documents above the SQS cap upload directly to BytePro
 
 **Why.** `todo.md`'s highest-priority open code item was documents larger than 180,000 bytes: SQS caps a

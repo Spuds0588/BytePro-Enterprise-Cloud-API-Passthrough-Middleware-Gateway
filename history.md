@@ -4,6 +4,40 @@ Append-only. Newest entries at the top. Never rewrite past entries; add a correc
 
 ---
 
+## 2026-11-07 — Published to main; Pages live; CI green on Node 20 and Node 24
+
+**Pushed.** MVP committed at `420d252` (41 files, 4,822 insertions) and pushed to `origin/main`.
+
+**CI caught a portability bug.** The first CI run failed on Node 24 only: `node --test test/` resolved the
+directory as a module (`MODULE_NOT_FOUND`) instead of discovering tests. Local Node 20 accepted it. Fixed in
+`6259620` by running `node --test test/*.test.js`; the same command was verified locally and then on both CI
+jobs. **Verify (Node 20): success. Verify (Node 24): success.** The visible test count moved from 52 to 51
+because the glob no longer counts `test/helpers.js` as a test file; no test was removed.
+
+**GitHub Pages.** Pages was already enabled with the `legacy` builder on `main` / root; no repository setting
+needed changing. The `pages build and deployment` run for `6259620` completed successfully. Live fetches from
+`https://spuds0588.github.io/BytePro-Enterprise-Cloud-API-Passthrough-Middleware-Gateway/`:
+
+| Surface | Result |
+| --- | --- |
+| `index.html` | `200 text/html`, 15,198 bytes, one `<h1>`, canonical link, JSON-LD block, issue/PR links |
+| `llms.txt` | `200 text/plain` |
+| `robots.txt` | `200`, sitemap directive present |
+| `sitemap.xml` | `200` |
+
+The SEO/AEO homepage is therefore live and verified at the HTTP level. It is a static page; no browser render
+or Lighthouse audit was performed.
+
+**Still not verified.** No AWS stack was deployed and no BytePro call was made. API Gateway key provisioning,
+DynamoDB, SQS, Secrets Manager, NAT egress, the real document/condition payloads, and the CloudFormation
+resource behavior remain unproven outside local tests. `todo.md` records the exact blocked items.
+
+**Cleanup.** `dist/` is generated and gitignored; removed after the build check. The local dev server was
+started with a recorded PID and stopped with `kill`; `ps -p` confirmed it was gone. No watcher, container, or
+dependency install was left behind.
+
+---
+
 ## 2026-11-07 — Local verification: 52/52 tests and a live HTTP smoke run
 
 **Why.** The MVP needed evidence before it could be committed. All checks below ran on this machine,

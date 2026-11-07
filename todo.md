@@ -66,10 +66,12 @@ Highest-value workflow for title and broker partners; prioritised above every ot
 - [x] `infra/template.yaml`: VPC + NAT + static EIP, DynamoDB tenants/sessions/jobs, SQS FIFO + DLQ, Secrets Manager, API Gateway usage plan, inline Lambda
 - [x] `deploy.sh` one-line CloudShell installer (prompts for BytePro URL/account/role credentials, generates invite codes, prints invite links + egress IP)
 - [x] Tests: session cache/refresh, invite provisioning, masking, reads/projection, fee/condition writes, document upload/list/download, validation failures, retry classification, job ownership, HTTP e2e, template guards, executed inline bundle, static/community guards
-- [x] `npm run verify` green in this environment
+- [x] `npm run verify` green in this environment (51 tests at `6259620`; CI Verify jobs green on Node 20 and 24)
 - [x] Community surfaces: `CONTRIBUTING.md`, `llms.txt`, GitHub Pages `index.html`, issue forms, PR template
 - [x] Community direction codified in `agents.md` §0 and repeated on every developer-facing surface
-- [x] GitHub Pages enabled on `main` / root; live page, `llms.txt`, `robots.txt`, and `sitemap.xml` fetched after push
+- [x] GitHub Pages enabled on `main` / root; live page (200, canonical + JSON-LD), `llms.txt` (200), `robots.txt` (200), and `sitemap.xml` (200) fetched 2026-11-07
+- [x] MVP committed and pushed: `420d252`; Node 24 test-command fix `6259620`; CI green on both Node versions
+- [x] Static homepage verified at the HTTP level only (no browser render or Lighthouse audit)
 - [—] Live AWS deployment + BytePro calls (blocked: no AWS account, AWS CLI, or BytePro access; probed 2026-11-07 — `aws` not installed, no `AWS_*` credentials, no `~/.aws`, no stack recorded)
 - [—] GitHub Discussions (maintainer action; issue forms are the support surface today)
 - [—] Contributor invitations and a triage rotation (maintainer action)

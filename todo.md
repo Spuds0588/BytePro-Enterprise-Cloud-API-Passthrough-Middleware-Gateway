@@ -23,6 +23,8 @@ Highest-value workflow for title and broker partners; prioritised above every ot
 
 Parity track with `Encompass-API-Passthrough-Middleware-Gateway-`. BytePro already ships documents and broker condition submission; the remaining items here are the underwriting-condition surfaces and a loan registration/submission convention so the family reads as one capability family.
 
+- [ ] Per-key bound BytePro user (leaked-loan-id hardening): bind each key to its own BytePro identity and key the session cache per identity instead of per role, so BytePro enforces loan visibility. Plan and open vendor questions in `docs/loan-ownership-binding.md`
+- [—] BLOCKED: per-key binding cannot land until the template gains headroom (197 free bytes under the 1 KB guard); requires S3-hosted template delivery like Encompass
 - [ ] Underwriting condition read/list: read and list underwriting/preliminary/post-closing enhanced or standard conditions for a loan with the appropriate persona scope
 - [ ] Condition document association: associate condition evidence documents (prior-to-docs, prior-to-funding, post-closing evidence) to a condition through the same persona-guarded capability BytePro already exposes for fee and document writes
 - [ ] Standard condition lifecycle: create, read, update, fulfill/close standard conditions for underwriting, preliminary, and postclosing as a broker action

@@ -4,6 +4,26 @@ Append-only. Newest entries at the top. Never rewrite past entries; add a correc
 
 ---
 
+## 2026-11-16 — Per-key loan ownership binding designed; blocked by template headroom
+
+**Encompass shipped it.** Its keys now bind to one Encompass user, verified at enrollment
+through impersonation plus `GET /company/users/me`, so Encompass decides loan visibility and
+a foreign loan id returns `404` (Encompass `npm run verify`: 95/95).
+
+**BytePro's gap is the role session.** `POST /session` authenticates a role account and
+`src/byte.js` caches that session per role, so every broker key currently acts as one BytePro
+identity — the same defect Encompass had with shared persona tokens. The port is to key the
+session cache per bound identity and give each tenant its own credentials. Both document
+upload paths (queued and synchronous) then inherit the binding, as do condition writes.
+
+**Why no code.** `template.yaml` is 49,979 bytes against a 51,200-byte cap with 1,024 bytes
+reserved by `test/template.test.js` — 197 bytes free. That is not a feature's worth of room,
+and trimming the guard to fit would be a fake pass. See `docs/loan-ownership-binding.md`.
+
+**Verification.** No source changed, so the suite is unchanged: `npm run verify` still green
+at 55 tests, template untouched at 49,979 bytes.
+
+
 ## 2026-11-16 — Daily check clear; parity research notes landed and the discovery stub is answered
 
 **Daily check.** Zero open issues, zero open PRs, and zero closed issues/PRs across all four family repos

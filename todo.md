@@ -19,6 +19,19 @@ Highest-value workflow for title and broker partners; prioritised above every ot
 - [—] Per-document organization scoping (blocked: no BytePro field ties a document to the caller's organization; see the security note in `README.md`)
 - [—] Appraisal (AMC) document or condition access (deferred: appraisal persona is read-only by design; open an issue with a real workflow)
 
+## Priority 1 (sister-project parity) — Encompass loan-file documents, underwriting conditions, and loan submission
+
+Parity track with `Encompass-API-Passthrough-Middleware-Gateway-`. BytePro already ships documents and broker condition submission; the remaining items here are the underwriting-condition surfaces and a loan registration/submission convention so the family reads as one capability family.
+
+- [ ] Underwriting condition read/list: read and list underwriting/preliminary/post-closing enhanced or standard conditions for a loan with the appropriate persona scope
+- [ ] Condition document association: associate condition evidence documents (prior-to-docs, prior-to-funding, post-closing evidence) to a condition through the same persona-guarded capability BytePro already exposes for fee and document writes
+- [ ] Standard condition lifecycle: create, read, update, fulfill/close standard conditions for underwriting, preliminary, and postclosing as a broker action
+- [ ] Loan registration (milestone flip): accept a full loan contract for registration and return the created loan id, with a milestone-aware submit action that flips the loan to the next submittal stage
+- [ ] Loan submission/status: expose loan submittal, resubmittal, and milestone state where BytePro exposes an equivalent workflow, so the surface matches the sibling repos’ loan lifecycle
+- [ ] Shared contract guard: the guest-facing read surface should describe these as sibling-project parity items, with BytePro-specific implementation differences optional and documented, not assumed identical to Encompass
+- [x] Implementation note / discovery stub: recorded in `docs/parity-implementation-notes.md` (2026-11-16) — `GET/POST /loans/{id}/documents` plus `GET /loans/{id}/documents/{docId}`, conditions as `Conditions[]` inside `PATCH /loans/{id}`, and submission as a queued loan PATCH rather than a dedicated BytePro submit route
+- [—] BLOCKED: live BytePro tenant or sanitized BytePro response captures to confirm document/condition/milestone surface shapes and the loan submission convention
+
 ## Phase 1 — Core Infrastructure
 
 - [x] Zero-dependency Node runtime, API-Gateway-shaped events (`src/app.js`, `src/server.js`, `src/lambda.js`)

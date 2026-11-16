@@ -4,6 +4,22 @@ Append-only. Newest entries at the top. Never rewrite past entries; add a correc
 
 ---
 
+## 2026-11-16 — Daily check clear; parity research notes landed and the discovery stub is answered
+
+**Daily check.** Zero open issues, zero open PRs, and zero closed issues/PRs across all four family repos
+(Encompass, MeridianLink, jXchange, BytePro). Nothing needed an answer, so no request was outstanding.
+
+**Research landed.** Added `docs/parity-implementation-notes.md` recording what this gateway would actually
+call for the parity track: `GET /loans/{id}/documents` and `POST /loans/{id}/documents` for list/create,
+`GET /loans/{id}/documents/{docId}` for download, conditions carried as `Conditions[]` inside
+`PATCH /loans/{id}` (upserted by description), and loan submission as a queued loan PATCH of fees and/or
+conditions rather than a dedicated BytePro submit route.
+
+**Scope.** The discovery-stub todo is ticked against that note. Research only: no runtime code changed, no
+route added, no test count moved. Live-tenant shapes, the milestone/submittal convention, and the
+per-document organization-scoping gap stay BLOCKED exactly as they were.
+
+
 ## 2026-11-07 — Verify fix shipped; Node 20/24 CI and Pages green
 
 **Pushed.** The verify-glob fix and its regression test are in `3932b29` on `main`. `todo.md` points to the

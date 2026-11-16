@@ -26,6 +26,16 @@ returns `404`.
 4. Document uploads go through two paths (queued under 180,000 bytes, synchronous above).
    Both call BytePro with the tenant's session, so both inherit the binding.
 
+## Entitlement is a separate check
+
+Binding a key to a vendor user is only half the control. The other half is deciding *which*
+user a given partner may bind. In Encompass that is now an explicit step: every invite is
+bound to one pre-authorized login, and a different login is refused before a key is minted,
+because otherwise anyone holding an invite link can claim any user the actor can reach.
+Carry the same rule here: the invite the lender issues must name the vendor login it
+authorizes, and enrollment must compare against that rather than accepting a login the caller
+types.
+
 ## Open vendor questions
 
 - Can BytePro service accounts be created per company through an API, or only in the
